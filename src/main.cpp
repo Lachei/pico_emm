@@ -13,6 +13,9 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#include "libraries/pico_graphics/pico_graphics.hpp"
+#include "drivers/st7701/st7701.hpp"
+
 #include "log_storage.h"
 #include "access_point.h"
 #include "wifi_storage.h"
@@ -22,14 +25,89 @@
 #include "measurements.h"
 #include "crypto_storage.h"
 #include "ntp_client.h"
+#include "draw.h"
 
 #define TEST_TASK_PRIORITY ( tskIDLE_PRIORITY + 1UL )
 
 constexpr UBaseType_t STANDARD_TASK_PRIORITY = tskIDLE_PRIORITY + 1ul;
 constexpr UBaseType_t CONTROL_TASK_PRIORITY = tskIDLE_PRIORITY + 10ul;
 
+constexpr uint32_t FRAME_WIDTH {240};
+constexpr uint32_t FRAME_HEIGHT {240};
+constexpr uint32_t BACKLIGHT = 45;
+constexpr uint32_t LCD_CLK = 26;
+constexpr uint32_t LCD_CS = 28;
+constexpr uint32_t LCD_DAT = 27;
+constexpr uint32_t LCD_DC = -1;
+constexpr uint32_t LCD_D0 = 1;
+using PixelBuffer = std::array<uint16_t, FRAME_WIDTH * FRAME_HEIGHT>;
+using Display = pimoroni::PicoGraphics_PenRGB565;
+using DisplayHQ = pimoroni::PicoVector;
+using Screen = pimoroni::ST7701;
+
 constexpr uint32_t time_ms() { return time_us_64() / 1000; }
 constexpr uint32_t time_s() { return time_us_64() / 1000000; }
+
+Screen& screen() {
+    static PixelBuffer screen_buffer;
+    static Screen screen{FRAME_WIDTH, FRAME_HEIGHT, pimoroni::ROTATE_0, pimoroni::SPIPins{spi1, LCD_CS, LCD_CLK, LCD_DAT, pimoroni::PIN_UNUSED, LCD_DC, BACKLIGHT}, screen_buffer.data()};
+    return screen;
+}
+
+Display& display() {
+    static PixelBuffer pixel_buffer;
+    static Display draw_buffer{FRAME_WIDTH, FRAME_HEIGHT, pixel_buffer.data()};
+    return draw_buffer;
+}
+
+DisplayHQ& display_hq(Display& display = display()) {
+    static DisplayHQ display_hq{&display};
+    return display_hq;
+}
+
+std::array<std::string_view, 4> texts{"Hello darkness", "my old friend,", "shall peace and glory", "thy remove"};
+void display_task(void *) {
+    LogInfo("Display task started");
+    constexpr uint32_t FPS_CAP{16};
+    // init all globals
+    screen().init();
+    display().set_font("bitmap8");
+    display_hq().set_antialiasing(PP_AA_X4);
+    display_hq().set_font("Roboto", 15);
+
+
+    uint32_t last_ms = time_ms();
+    float dms{};
+    for (;;) {
+        uint32_t ms = time_ms();
+        uint32_t delta_ms = ms - last_ms;
+        dms = .9 * dms + .1 * delta_ms;
+        float fps = 1000. / std::max(dms, 1.f);
+        std::string_view fps_string = static_format<20>("FPS: {}", int(fps + .5));
+        last_ms = ms;
+
+        float x_off = std::sin(ms * .003) * 10;
+        float y_off = std::cos(ms * .003) * 10;
+        pp_mat3_t text_pos = pp_mat3_identity();
+        pp_mat3_translate(&text_pos, 50 + x_off, 100 + y_off);
+
+        display().set_pen(65535);
+        display().clear();
+        display().set_pen(0);
+        pp_transform(NULL);
+        display_hq().text("Ab gehts!", 15, 50, &text_pos);
+        display().text("Minifuzi EMM", {50, 5}, 150);
+        display().text(texts[ms / 3000 % texts.size()], {30 + x_off, 30 + y_off}, 240);
+        display().text(fps_string, {210, 1}, 40, 1);
+        overview_page().draw(display(), display_hq(), {ms, delta_ms}, 0, {}, {}, {});
+        screen().update(&display());
+        vTaskDelay(pdMS_TO_TICKS(FPS_CAP - std::min(time_ms() - ms, uint32_t(FPS_CAP)))); // creates a stable 60fps 
+    }
+}
+
+void touchscreen_task(void *) {
+
+}
 
 void usb_comm_task(void *) {
     LogInfo("Usb communication task started");
@@ -38,14 +116,6 @@ void usb_comm_task(void *) {
     for (;;) {
 	handle_usb_command();
     }
-}
-
-void measure_task(void *) {
-}
-
-void control_task(void *) {
-    time_us_64();
-
 }
 
 void wifi_search_task(void *) {
@@ -102,6 +172,7 @@ void startup_task(void *) {
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
     xTaskCreate(usb_comm_task, "usb_comm", 512, NULL, 1, NULL);
     xTaskCreate(wifi_search_task, "UpdateWifiThread", 512, NULL, 1, NULL);
+    xTaskCreate(display_task, "DisplayThread", 512, NULL, 1, NULL);
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
     vTaskDelete(NULL); // remove this task for efficiency reasions
 }

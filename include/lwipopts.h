@@ -95,6 +95,8 @@
 #define MEMP_NUM_SYS_TIMEOUT (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 100)
 #define MEMP_NUM_TCP_PCB 36
 #define MEMP_NUM_UDP_PCB 36
+#define MEMP_NUM_TCP_PCB_TIME_WAIT 10
+#define TCP_MSL 2000 
 
 // Enable cgi and ssi
 #define LWIP_HTTPD_CGI 0
