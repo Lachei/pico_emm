@@ -74,14 +74,14 @@ struct HistoryPage {
 	static_vector<CurveScale, 12> curve_scales{};
 
 	void draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, std::span<CurveInfo> curve_infos);
-	bool handle_touch_input();
+	bool handle_touch_input(TouchInfo &touch_info);
 };
 
 struct settings;
 struct SettingsPage {
 	float base_offset{480};
 	void draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, settings& settings);
-	bool handle_touch_input();
+	bool handle_touch_input(TouchInfo &touch_info);
 };
 
 // singletons for main drawing (safe reduction of stack allocation)

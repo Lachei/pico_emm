@@ -116,12 +116,21 @@ void OverviewPage::draw(Display &display, DisplayHQ &display_hq, TimeInfo time_i
         draw_pv(display_hq, pv_pos, {.background_col = {255,255,200}});
         draw_battery(display_hq, battery_pos, {.background_col= {100, 255, 100}});
 }
+bool OverviewPage::handle_touch_input(TouchInfo &touch_info) {
+	return false;
+}
 
 void HistoryPage::draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, std::span<CurveInfo> curve_infos) {
 
 }
+bool HistoryPage::handle_touch_input(TouchInfo &touch_info) {
+	return false;
+}
 
 void SettingsPage::draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, settings& settings) {
 
+}
+bool SettingsPage::handle_touch_input(TouchInfo &touch_info) {
+	return false;
 }
 

@@ -129,29 +129,37 @@ void display_task(void *) {
     }
 }
 
+struct TouchInfo {
+    std::optional<TS_Point> last_touch;
+    TS_Point cur_touch;
+};
 void touchscreen_task(void *) {
     LogInfo("Touchscreen task started");
     if (!touchscreen().begin())
         LogError("Failed to init touchscreen");
 
-    std::optional<TS_Point> last_touch;
+    TouchInfo touch_info;
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(50));
         uint8_t touches = touchscreen().touched();
         if (!touches) {
-            last_touch = {};
+            touch_info.last_touch = {};
             // snap to closest page
             page_offset = std::clamp(std::round(page_offset / 240), -2.f, .0f) * 240.f;
             continue;
         }
-        TS_Point p = touchscreen().getPoint(0);
-        if (!last_touch) { // new touch
+        touch_info.cur_touch = touchscreen().getPoint(0);
+        if (!touch_info.last_touch) { // new touch
         } else { // dragging
-            float dx = (p.x - last_touch->x) / 2; // divide by 2 due to diff in screen res and internal pixel
-            page_offset += dx;
+            if (!overview_page().handle_touch_input(touch_info) &&
+                !history_page().handle_touch_input(touch_info) &&
+                !settings_page().handle_touch_input(touch_info)) {
+                float dx = (touch_info.cur_touch.x - touch_info.last_touch->x) / 2; // divide by 2 due to diff in screen res and internal pixel
+                page_offset += dx;
+            }
         }
-        last_touch = p;
+        touch_info.last_touch = touch_info.cur_touch;
     }
 }
 
