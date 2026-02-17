@@ -24,11 +24,11 @@ if (NOT PRESTO_PATH AND NOT DEFINED ENV{PRESTO_PATH})
         message(FATAL_ERROR "Missing PRESTO_PATH source path. Set by declaring environment variable PRESTO_PATH or add -DPRESTO_PATH=<path> to the cmake call. Repo link: https://github.com/pimoroni/presto.git")
 endif()
 if (NOT PRESTO_PATH AND DEFINED ENV{PRESTO_PATH})
-        set(LIBPIMORONI_PICO_PATH ENV{PRESTO_PATH})
+        set(PRESTO_PATH ENV{PRESTO_PATH})
 endif()
 
 if (NOT PICO_BOARD)
-        message("No board set, defaulting to pico_w")
+        message("No board set, defaulting to pimoroni_pico_plus2_w_rp2350")
         set(PICO_BOARD pimoroni_pico_plus2_w_rp2350)
 endif()
 
@@ -77,6 +77,7 @@ add_executable(pico-emm
         src/ntp_client.cpp
         src/font_file.cpp
         src/draw.cpp
+        src/FT6236.cpp
 )
 set_property(TARGET pico-emm PROPERTY CXX_STANDARD 23)
 target_include_directories(pico-emm PRIVATE
@@ -88,6 +89,7 @@ target_link_libraries(pico-emm
         pico_stdlib
         pico_mbedtls
         hardware_flash
+        hardware_i2c
         pico_cyw43_arch_lwip_sys_freertos
         pico_lwip_mdns
         FreeRTOS-Kernel-Heap4 # FreeRTOS kernel and dynamic heap

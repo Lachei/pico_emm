@@ -85,7 +85,10 @@ void draw_battery(DisplayHQ &display, Mat &transform, DrawSettings draw_settings
 
 void OverviewPage::draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, 
 	   std::span<InverterGroup> inverter_groups, PowerInfo home, PowerInfo meter) {
-        float x_off = std::sin(time_info.ms * .003) * 10;
+	if (base_offset + x_offset > 240 ||
+	    base_offset + x_offset + 240 < 0)
+		return;
+        float x_off = std::sin(time_info.ms * .003) * 10 + x_offset;
         float y_off = std::cos(time_info.ms * .003) * 10;
         pp_mat3_t pole_pos = pp_mat3_identity();
         pp_mat3_translate(&pole_pos, 50 + x_off, 150 + y_off);
@@ -118,7 +121,7 @@ void HistoryPage::draw(Display &display, DisplayHQ &display_hq, TimeInfo time_in
 
 }
 
-void SettingsPage::draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, Settings& settings) {
+void SettingsPage::draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, settings& settings) {
 
 }
 

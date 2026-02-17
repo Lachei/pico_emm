@@ -68,7 +68,7 @@ struct CurveScale {
 	float max_value{};
 };
 struct HistoryPage {
-	float base_offset{480};
+	float base_offset{240};
 	HistoryPageType history_page{DAILY};
 	VisType vis_type{POWER_PER_COMPONENT};
 	static_vector<CurveScale, 12> curve_scales{};
@@ -77,10 +77,10 @@ struct HistoryPage {
 	bool handle_touch_input();
 };
 
-struct Settings;
+struct settings;
 struct SettingsPage {
-	float base_offset{240};
-	void draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, Settings& settings);
+	float base_offset{480};
+	void draw(Display &display, DisplayHQ &display_hq, TimeInfo time_info, float x_offset, settings& settings);
 	bool handle_touch_input();
 };
 
