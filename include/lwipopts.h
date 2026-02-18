@@ -1,6 +1,15 @@
 #ifndef _LWIPOPTS_H
 #define _LWIPOPTS_H
 
+
+#define MEM_LIBC_MALLOC        1
+#define MEMP_MEM_MALLOC        1
+#define MEM_SIZE               0
+#define MEMP_USE_CUSTOM_POOLS  0
+#define SYS_LIGHTWEIGHT_PROT   1
+#define mem_clib_malloc  pvPortMalloc
+#define mem_clib_free    vPortFree
+
 // (see https://www.nongnu.org/lwip/2_1_x/group__lwip__opts.html for details)
 
 #define NO_SYS                      0
@@ -8,12 +17,6 @@
 #define LWIP_NETIF_HOSTNAME         1
 #define LWIP_DHCP_HOSTNAME          1
 
-#if PICO_CYW43_ARCH_POLL
-#define MEM_LIBC_MALLOC             1
-#else
-// MEM_LIBC_MALLOC is incompatible with non polling versions
-#define MEM_LIBC_MALLOC             0
-#endif
 #define MEM_ALIGNMENT               4
 #ifndef MAX_CONCURRENT_CX_HINT
 #define MAX_CONCURRENT_CX_HINT      6

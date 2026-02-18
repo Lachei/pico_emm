@@ -53,20 +53,20 @@ using Touchscreen = FT6236;
 
 constexpr uint32_t time_ms() { return time_us_64() / 1000; }
 constexpr uint32_t time_s() { return time_us_64() / 1000000; }
+uint8_t *ucHeap = (uint8_t*)std::uintptr_t(0x11000000);
 
-// void init_psram() {
-//     gpio_set_function(47, GPIO_FUNC_XIP_CS1); // CS for PSRAM
-//     xip_ctrl_hw->ctrl|=XIP_CTRL_WRITABLE_M1_BITS;
-// }
+void init_psram() {
+    gpio_set_function(47, GPIO_FUNC_XIP_CS1); // CS for PSRAM
+    xip_ctrl_hw->ctrl |= XIP_CTRL_WRITABLE_M1_BITS;
+}
 
+static std::array<uint16_t, FRAME_WIDTH * FRAME_HEIGHT> frame_buffer{};
 static Screen& screen() {
-    static std::array<uint16_t, FRAME_WIDTH * FRAME_HEIGHT> frame_buffer{};
     static Screen screen{FRAME_WIDTH, FRAME_HEIGHT, pimoroni::ROTATE_0, pimoroni::SPIPins{spi1, LCD_CS, LCD_CLK, LCD_DAT, pimoroni::PIN_UNUSED, LCD_DC, BACKLIGHT}, frame_buffer.data()};
     return screen;
 }
 
 static Display& display() {
-    static std::array<uint16_t, FRAME_WIDTH * FRAME_HEIGHT> frame_buffer{};
     static uint16_t *screen_buffer = (uint16_t*)std::uintptr_t(0x11000000);
     static Display draw_buffer{FRAME_WIDTH, FRAME_HEIGHT, frame_buffer.data()};
     return draw_buffer;
@@ -130,8 +130,10 @@ void display_task(void *) {
 }
 
 struct TouchInfo {
+    TS_Point touch_start;
     std::optional<TS_Point> last_touch;
     TS_Point cur_touch;
+    constexpr bool touch_started() const {return !last_touch;}
 };
 void touchscreen_task(void *) {
     LogInfo("Touchscreen task started");
@@ -151,6 +153,7 @@ void touchscreen_task(void *) {
         }
         touch_info.cur_touch = touchscreen().getPoint(0);
         if (!touch_info.last_touch) { // new touch
+            touch_info.touch_start = touch_info.cur_touch;
         } else { // dragging
             if (!overview_page().handle_touch_input(touch_info) &&
                 !history_page().handle_touch_input(touch_info) &&
@@ -209,31 +212,32 @@ void wifi_search_task(void *) {
 void startup_task(void *) {
     LogInfo("Starting initialization");
     std::cout << "Starting initialization\n";
-    if (cyw43_arch_init()) {
+    if (false) {
         for (;;) {
             vTaskDelay(1000);
             LogError("failed to initialize\n");
             std::cout << "failed to initialize arch (probably ram problem, increase ram size)\n";
         }
     }
-    cyw43_arch_enable_sta_mode();
-    wifi_storage::Default().update_hostname();
-    Webserver().start();
-    LogInfo("Ready, running http at {}", ip4addr_ntoa(netif_ip4_addr(netif_list)));
+    // cyw43_arch_enable_sta_mode();
+    // wifi_storage::Default().update_hostname();
+    // Webserver().start();
+    // LogInfo("Ready, running http at {}", ip4addr_ntoa(netif_ip4_addr(netif_list)));
     LogInfo("Initialization done");
     std::cout << "Initialization done, get all further info via the commands shown in 'help'\n";
 
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-    xTaskCreate(usb_comm_task, "usb_comm", 512, NULL, 1, NULL);
-    xTaskCreate(wifi_search_task, "UpdateWifiThread", 512, NULL, 1, NULL);
+    //cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+    // xTaskCreate(usb_comm_task, "usb_comm", 512, NULL, 1, NULL);
+    // xTaskCreate(wifi_search_task, "UpdateWifiThread", 512, NULL, 1, NULL);
     xTaskCreate(display_task, "DisplayThread", 512, NULL, 1, NULL);
     xTaskCreate(touchscreen_task, "TouchscreenThread", 512, NULL, 1, NULL);
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+    // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
     vTaskDelete(NULL); // remove this task for efficiency reasions
 }
 
 int main( void )
 {
+    init_psram();
     stdio_init_all();
 
     LogInfo("Starting FreeRTOS on all cores.");

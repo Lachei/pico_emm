@@ -78,8 +78,11 @@ add_executable(pico-emm
         src/font_file.cpp
         src/draw.cpp
         src/FT6236.cpp
+        src/sys_arch.c
 )
 set_property(TARGET pico-emm PROPERTY CXX_STANDARD 23)
+set_property(TARGET pico-emm APPEND_STRING PROPERTY LINK_FLAGS "-Wl,--print-memory-usage")
+target_compile_definitions(pico-emm PUBLIC NDEBUG)
 target_include_directories(pico-emm PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${LIBPIMORONI_PICO_PATH}
