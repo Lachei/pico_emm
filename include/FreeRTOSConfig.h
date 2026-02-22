@@ -40,6 +40,8 @@
  * See http://www.freertos.org/a00110.html
  *----------------------------------------------------------*/
 
+#define configCPU_CLOCK_HZ                      (CPU_CLOCK_MHZ UL * 1000000)
+
 /* Scheduler Related */
 #define configUSE_PREEMPTION                    1
 #define configUSE_TICKLESS_IDLE                 0
@@ -74,8 +76,8 @@
 /* Memory allocation related definitions. */
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   3000 * 1024
-#define configAPPLICATION_ALLOCATED_HEAP        1
+#define configTOTAL_HEAP_SIZE                   64 * 1024
+#define configAPPLICATION_ALLOCATED_HEAP        0
 
 /* Hook function related definitions. */
 #define configCHECK_FOR_STACK_OVERFLOW          0
@@ -94,7 +96,7 @@
 /* Software timer related definitions. */
 #define configUSE_TIMERS                        1
 #define configTIMER_TASK_PRIORITY               ( configMAX_PRIORITIES - 1 )
-#define configTIMER_QUEUE_LENGTH                2
+#define configTIMER_QUEUE_LENGTH                10 
 #define configTIMER_TASK_STACK_DEPTH            1024
 
 /* Interrupt nesting behaviour configuration. */

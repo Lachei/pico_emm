@@ -11,6 +11,8 @@
 #include "hardware/structs/qmi.h"
 #include "hardware/structs/io_bank0.h"
 #include "hardware/structs/xip.h"
+#include "hardware/clocks.h"
+#include "hardware/vreg.h"
 
 #include "lwip/ip4_addr.h"
 #include "lwip/apps/mdns.h"
@@ -32,8 +34,10 @@
 #include "ntp_client.h"
 #include "draw.h"
 #include "FT6236.h"
+#include "psram.h"
 
 #define TEST_TASK_PRIORITY ( tskIDLE_PRIORITY + 1UL )
+#define PSRAM __attribute__((section (".psram")))
 
 constexpr UBaseType_t STANDARD_TASK_PRIORITY = tskIDLE_PRIORITY + 1ul;
 constexpr UBaseType_t CONTROL_TASK_PRIORITY = tskIDLE_PRIORITY + 10ul;
@@ -46,35 +50,36 @@ constexpr uint32_t LCD_CS = 28;
 constexpr uint32_t LCD_DAT = 27;
 constexpr uint32_t LCD_DC = -1;
 constexpr uint32_t LCD_D0 = 1;
-using Display = pimoroni::PicoGraphics_PenRGB565;
-using DisplayHQ = pimoroni::PicoVector;
 using Screen = pimoroni::ST7701;
 using Touchscreen = FT6236;
+constexpr int FRAME_BUFFERS = 2;
 
 constexpr uint32_t time_ms() { return time_us_64() / 1000; }
 constexpr uint32_t time_s() { return time_us_64() / 1000000; }
-uint8_t *ucHeap = (uint8_t*)std::uintptr_t(0x11000000);
 
-void init_psram() {
+void __no_inline_not_in_flash_func(init_psram)() {
     gpio_set_function(47, GPIO_FUNC_XIP_CS1); // CS for PSRAM
     xip_ctrl_hw->ctrl |= XIP_CTRL_WRITABLE_M1_BITS;
 }
 
-static std::array<uint16_t, FRAME_WIDTH * FRAME_HEIGHT> frame_buffer{};
+struct DrawContext {
+    int cur_index{};
+    uint16_t frame_buffers[FRAME_BUFFERS][FRAME_WIDTH * FRAME_HEIGHT];
+    Draw draw{FRAME_WIDTH, FRAME_HEIGHT, frame_buffers[cur_index]};
+    // DrawVec draw_vec{&draw};
+    uint16_t* frame_buffer() {return frame_buffers[cur_index];}
+    uint16_t* frame_buffer_end() {return frame_buffers[cur_index] + FRAME_WIDTH * FRAME_HEIGHT;}
+    void swap() { cur_index = (cur_index + 1) % FRAME_BUFFERS; draw.frame_buffer = frame_buffers[cur_index]; }
+};
+
+static DrawContext& draw_ctx() {
+    static DrawContext ctx{};
+    return ctx;
+}
+
 static Screen& screen() {
-    static Screen screen{FRAME_WIDTH, FRAME_HEIGHT, pimoroni::ROTATE_0, pimoroni::SPIPins{spi1, LCD_CS, LCD_CLK, LCD_DAT, pimoroni::PIN_UNUSED, LCD_DC, BACKLIGHT}, frame_buffer.data()};
+    static Screen screen{FRAME_WIDTH, FRAME_HEIGHT, pimoroni::ROTATE_0, pimoroni::SPIPins{spi1, LCD_CS, LCD_CLK, LCD_DAT, pimoroni::PIN_UNUSED, LCD_DC, BACKLIGHT}, draw_ctx().frame_buffer()};
     return screen;
-}
-
-static Display& display() {
-    static uint16_t *screen_buffer = (uint16_t*)std::uintptr_t(0x11000000);
-    static Display draw_buffer{FRAME_WIDTH, FRAME_HEIGHT, frame_buffer.data()};
-    return draw_buffer;
-}
-
-static DisplayHQ& display_hq(Display& display = display()) {
-    static DisplayHQ display_hq{&display};
-    return display_hq;
 }
 
 static Touchscreen& touchscreen() {
@@ -84,27 +89,47 @@ static Touchscreen& touchscreen() {
 
 static std::atomic<float> page_offset;
 
+static std::array<InverterGroup, 3> test_groups{
+    InverterGroup {
+        .inverter = {.imp_w = 0, .exp_w = 1000},
+        .pv = {.imp_w = 0, .exp_w = 1100},
+        .battery = {.imp_w = 100, .exp_w = 0}
+    },
+    InverterGroup {
+        .inverter = {.imp_w = 0, .exp_w = 1000},
+        .pv = {.imp_w = 0, .exp_w = 1100},
+        .battery = {.imp_w = 100, .exp_w = 0}
+    },
+    InverterGroup {
+        .inverter = {.imp_w = 0, .exp_w = 1000},
+        .pv = {.imp_w = 0, .exp_w = 1100},
+        .battery = {.imp_w = 100, .exp_w = 0}
+    },
+};
+
 std::array<std::string_view, 4> texts{"Hello darkness", "my old friend,", "shall peace and glory", "thy remove"};
 void display_task(void *) {
     LogInfo("Display task started");
     constexpr uint32_t FPS_CAP{16};
     // init all globals
     screen().init();
-    display().set_font("bitmap8");
-    display_hq().set_antialiasing(PP_AA_X4);
-    display_hq().set_font("Roboto", 15);
+    draw_ctx().draw.set_font("bitmap8");
+    // draw_ctx().draw_vec.set_antialiasing(PP_AA_X16);
+    // draw_ctx().draw_vec.set_font("Roboto", 15);
 
-
+    LogInfo("Psram size: {}", ps_size);
+    uint32_t start = time_ms();
     uint32_t last_ms = time_ms();
     float dms{};
     float cur_page_offset = page_offset;
+    float fps{};
     for (;;) {
         uint32_t ms = time_ms();
         uint32_t delta_ms = ms - last_ms;
-        dms = .9 * dms + .1 * delta_ms;
-        float fps = 1000. / std::max(dms, 1.f);
-        std::string_view fps_string = static_format<20>("FPS: {}", int(fps + .5));
         last_ms = ms;
+        dms = .9 * dms + .1 * delta_ms;
+        fps = 1000. / std::max(dms, 1.f);
+        std::string_view fps_string = static_format<20>("FPS: {}", int(fps + .5));
         float page_a = 0.2;
         cur_page_offset = (1 - page_a) * cur_page_offset + page_a * page_offset;
 
@@ -113,28 +138,31 @@ void display_task(void *) {
         pp_mat3_t text_pos = pp_mat3_identity();
         pp_mat3_translate(&text_pos, 50 + x_off, 100 + y_off);
 
-        display().set_pen(65535);
-        display().clear();
-        display().set_pen(0);
-        pp_transform(NULL);
-        display_hq().text("Ab gehts!", 15, 50, &text_pos);
-        display().text("Minifuzi EMM", {50, 5}, 150);
-        display().text(texts[ms / 3000 % texts.size()], {30 + x_off, 30 + y_off}, 240);
-        display().text(fps_string, {210, 1}, 40, 1);
-        overview_page().draw(display(), display_hq(), {ms, delta_ms}, cur_page_offset, {}, {}, {});
-        history_page().draw(display(), display_hq(), {ms, delta_ms}, cur_page_offset, {});
-        settings_page().draw(display(), display_hq(), {ms, delta_ms}, cur_page_offset, settings::Default());
-        screen().update(&display());
+        std::fill(draw_ctx().frame_buffer(), draw_ctx().frame_buffer_end(), 0xffff);
+        draw_ctx().draw.set_pen(0);
+        draw_ctx().draw.text("Minifuzi EMM", {50, 5}, 150);
+        draw_ctx().draw.set_pen(0x4f, 0x9f, 0x98);
+        draw_ctx().draw.line({45, 22}, {174, 22});
+        // draw_ctx().draw.text(texts[ms / 3000 % texts.size()], {30 + x_off, 30 + y_off}, 240);
+        draw_ctx().draw.set_pen(0);
+        draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
+        overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_groups, {}, {});
+        history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, {});
+        settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default());
+        screen().set_framebuffer(draw_ctx().frame_buffer());
+        draw_ctx().swap();
+        screen().wait_for_vsync();
+        // taskYIELD();
         vTaskDelay(pdMS_TO_TICKS(FPS_CAP - std::min(time_ms() - ms, uint32_t(FPS_CAP)))); // creates a stable 60fps 
+        //vTaskDelay(pdMS_TO_TICKS(1000)); // creates a stable 60fps 
     }
 }
 
-struct TouchInfo {
-    TS_Point touch_start;
-    std::optional<TS_Point> last_touch;
-    TS_Point cur_touch;
-    constexpr bool touch_started() const {return !last_touch;}
-};
+bool handle_touch_pages(TouchInfo &touch_info, int x_offset) {
+    return overview_page().handle_touch_input(touch_info, x_offset) ||
+           history_page().handle_touch_input(touch_info, x_offset) ||
+           settings_page().handle_touch_input(touch_info, x_offset);
+}
 void touchscreen_task(void *) {
     LogInfo("Touchscreen task started");
     if (!touchscreen().begin())
@@ -144,25 +172,25 @@ void touchscreen_task(void *) {
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(50));
+        touch_info.last_touch = touch_info.cur_touch;
+        touch_info.cur_touch = {};
         uint8_t touches = touchscreen().touched();
         if (!touches) {
-            touch_info.last_touch = {};
+            if (touch_info.last_touch)
+                handle_touch_pages(touch_info, page_offset);
             // snap to closest page
             page_offset = std::clamp(std::round(page_offset / 240), -2.f, .0f) * 240.f;
             continue;
         }
-        touch_info.cur_touch = touchscreen().getPoint(0);
-        if (!touch_info.last_touch) { // new touch
-            touch_info.touch_start = touch_info.cur_touch;
-        } else { // dragging
-            if (!overview_page().handle_touch_input(touch_info) &&
-                !history_page().handle_touch_input(touch_info) &&
-                !settings_page().handle_touch_input(touch_info)) {
-                float dx = (touch_info.cur_touch.x - touch_info.last_touch->x) / 2; // divide by 2 due to diff in screen res and internal pixel
-                page_offset += dx;
-            }
+        TS_Point t = touchscreen().getPoint(0);
+        touch_info.cur_touch = Point{t.x / 2, t.y / 2};
+        bool touch_handled = handle_touch_pages(touch_info, page_offset);
+        if (!touch_handled && touch_info.touch_started())
+            touch_info.touch_start = *touch_info.cur_touch;
+        if (!touch_handled && !touch_info.touch_started()) { // dragging
+            float dx = (touch_info.cur_touch->x - touch_info.last_touch->x); // divide by 2 due to diff in screen res and internal pixel
+            page_offset += dx;
         }
-        touch_info.last_touch = touch_info.cur_touch;
     }
 }
 
@@ -212,33 +240,37 @@ void wifi_search_task(void *) {
 void startup_task(void *) {
     LogInfo("Starting initialization");
     std::cout << "Starting initialization\n";
-    if (false) {
+    if (cyw43_arch_init()) {
         for (;;) {
             vTaskDelay(1000);
             LogError("failed to initialize\n");
             std::cout << "failed to initialize arch (probably ram problem, increase ram size)\n";
         }
     }
-    // cyw43_arch_enable_sta_mode();
-    // wifi_storage::Default().update_hostname();
-    // Webserver().start();
-    // LogInfo("Ready, running http at {}", ip4addr_ntoa(netif_ip4_addr(netif_list)));
+    cyw43_arch_enable_sta_mode();
+    wifi_storage::Default().update_hostname();
+    Webserver().start();
+    LogInfo("Ready, running http at {}", ip4addr_ntoa(netif_ip4_addr(netif_list)));
     LogInfo("Initialization done");
     std::cout << "Initialization done, get all further info via the commands shown in 'help'\n";
 
-    //cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-    // xTaskCreate(usb_comm_task, "usb_comm", 512, NULL, 1, NULL);
-    // xTaskCreate(wifi_search_task, "UpdateWifiThread", 512, NULL, 1, NULL);
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+    xTaskCreate(usb_comm_task, "usb_comm", 512, NULL, 1, NULL);
+    xTaskCreate(wifi_search_task, "UpdateWifiThread", 512, NULL, 1, NULL);
     xTaskCreate(display_task, "DisplayThread", 512, NULL, 1, NULL);
     xTaskCreate(touchscreen_task, "TouchscreenThread", 512, NULL, 1, NULL);
-    // cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
     vTaskDelete(NULL); // remove this task for efficiency reasions
 }
 
 int main( void )
 {
-    init_psram();
+    vreg_set_voltage(VREG_VOLTAGE_1_30);  
+    sleep_ms(10);
+    set_sys_clock_khz(CPU_CLOCK_MHZ * 1000, true);
     stdio_init_all();
+    setup_psram();
+
 
     LogInfo("Starting FreeRTOS on all cores.");
     std::cout << "Starting FreeRTOS on all cores\n";

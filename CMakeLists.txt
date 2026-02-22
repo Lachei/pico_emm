@@ -78,11 +78,11 @@ add_executable(pico-emm
         src/font_file.cpp
         src/draw.cpp
         src/FT6236.cpp
-        src/sys_arch.c
+        src/psram.cpp
 )
 set_property(TARGET pico-emm PROPERTY CXX_STANDARD 23)
 set_property(TARGET pico-emm APPEND_STRING PROPERTY LINK_FLAGS "-Wl,--print-memory-usage")
-target_compile_definitions(pico-emm PUBLIC NDEBUG)
+target_compile_definitions(pico-emm PUBLIC CPU_CLOCK_MHZ=333 CYW43_PIO_CLOCK_DIV_INT=3 RP2350_PSRAM_MAX_SCK_HZ=170000000)
 target_include_directories(pico-emm PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${LIBPIMORONI_PICO_PATH}
@@ -104,4 +104,6 @@ target_link_libraries(pico-emm
 pico_add_extra_outputs(pico-emm)
 pico_enable_stdio_usb(pico-emm 1)
 pico_enable_stdio_uart(pico-emm 0)
+
+pico_set_linker_script(pico-emm ${CMAKE_CURRENT_SOURCE_DIR}/src/memmap_mp_rp2350_psram.ld)
 

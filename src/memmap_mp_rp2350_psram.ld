@@ -23,11 +23,11 @@
 
 MEMORY
 {
-    INCLUDE "pico_flash_region.ld"
+    FLASH(rx) : ORIGIN = 0x10000000, LENGTH = 4 * 1024 * 1024
+    PSRAM(rwx) : ORIGIN = 0x11000000, LENGTH = 8 * 1024 * 1024
     RAM(rwx) : ORIGIN =  0x20000000, LENGTH = 512k
     SCRATCH_X(rwx) : ORIGIN = 0x20080000, LENGTH = 4k
     SCRATCH_Y(rwx) : ORIGIN = 0x20081000, LENGTH = 4k
-        PSRAM(rwx) : ORIGIN = 0x11000000, LENGTH = (8 * 1024 * 1024)
 }
 
 ENTRY(_entry_point)
@@ -250,9 +250,11 @@ SECTIONS
     } > SCRATCH_Y AT > FLASH
     __scratch_y_source__ = LOADADDR(.scratch_y);
 
-    .psram (NOLOAD): {
-        . = ALIGN(4);
+    .psram (NOLOAD) : {
+        __psram_start__ = .;
         *(.psram*)
+        . = ALIGN(1024);
+        __psram_heap_start__ = .;
     } > PSRAM
 
     /* .stack*_dummy section doesn't contains any symbols. It is only
@@ -292,6 +294,10 @@ SECTIONS
     PROVIDE( __tls_align = MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)) );
     PROVIDE( __tls_size_align = (__tls_size + __tls_align - 1) & ~(__tls_align - 1));
     PROVIDE( __arm32_tls_tcb_offset = MAX(8, __tls_align) );
+
+    /* TLSF */
+    PROVIDE (__psram_start = __psram_start__);
+    PROVIDE (__psram_heap_start = __psram_heap_start__);
 
     /* llvm-libc */
     PROVIDE (_end = __end__);
