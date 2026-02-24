@@ -24,12 +24,14 @@ struct DrawSettings {
 	RGB background_col{255, 255, 255};
 };
 enum SourceSinkType{ HOUSE, GRID, SMART_METER, INVERTER, PV, BATTERY };
+enum Direction{UP, RIGHT, DOWN, LEFT};
+enum PositionFlags{ABSOLUTE, Y_RELATIVE};
 struct EnergyBlobInfo {
 	float energy;
-	float x, y;
-	SourceSinkType start_type;
-	SourceSinkType end_type;
-	uint32_t end_type_id;
+	float x, y, dir_change;
+	int end_device_id;
+	Direction dir;
+	PositionFlags pos_flags;
 };
 
 struct TouchInfo {
@@ -56,13 +58,23 @@ struct Button {
 	// sets the button state, press is can then be checke with next Button() call
 	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
 };
+constexpr int HOME_ID = 0;
+constexpr int GRID_ID = 1;
+constexpr int METER_ID = 2;
+inline int get_next_device_id() {static int cur_id{METER_ID}; return ++cur_id;}
 struct TimeInfo {
 	uint32_t ms;
 	uint32_t delta_ms;
 };
-struct PowerInfo{
+struct PowerInfo {
+	int device_id;
 	float imp_w;
 	float exp_w;
+};
+struct EnergyInfo {
+	int device_id;
+	float imp_ws;
+	float exp_ws;
 };
 struct InverterGroup {
 	PowerInfo inverter, pv, battery;
@@ -75,7 +87,11 @@ struct OverviewPage {
 	bool drag_ig_view{};
 	float y_offset{};
 	float inverter_scroll{};
-	static_vector<EnergyBlobInfo, 32> energy_blobs{};
+	uint32_t d_last_spawn_ms{};
+	EnergyInfo home_energy_info{.device_id = HOME_ID};
+	EnergyInfo meter_energy_info{.device_id = METER_ID};
+	static_vector<EnergyInfo, 32> energy_infos{};
+	static_vector<EnergyBlobInfo, 128> energy_blobs{};
 
 	void draw(Draw &display, TimeInfo time_info, float x_offset, 
 	   std::span<InverterGroup> inverter_groups, PowerInfo home, PowerInfo meter);
@@ -87,7 +103,9 @@ enum VisType { POWER_PER_COMPONENT, POWER_BALANCE };
 struct CurveInfo {
 	std::string_view name;
 	std::string_view unit_name;
-	static_vector<uint16_t, 512> data_finfos[HISTORY_PAGE_COUNT];
+	std::string_view time_start;
+	std::string_view time_end;
+	static_vector<uint16_t, 512> data_fifos[HISTORY_PAGE_COUNT];
 };
 struct CurveScale {
 	std::string_view unit_name;

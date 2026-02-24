@@ -33,7 +33,7 @@
 #endif
 #define MEMP_NUM_TCP_SEG            32
 #define MEMP_NUM_ARP_QUEUE          10
-#define PBUF_POOL_SIZE              24
+#define PBUF_POOL_SIZE              32
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
 #define LWIP_ICMP                   1
@@ -103,8 +103,8 @@
 #define LWIP_NUM_NETIF_CLIENT_DATA 1
 #define MDNS_RESP_USENETIF_EXTCALLBACK  1
 #define MEMP_NUM_SYS_TIMEOUT (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 100)
-#define MEMP_NUM_TCP_PCB 36
-#define MEMP_NUM_UDP_PCB 36
+#define MEMP_NUM_TCP_PCB 64
+#define MEMP_NUM_UDP_PCB 64
 #define MEMP_NUM_TCP_PCB_TIME_WAIT 10
 #define TCP_MSL 2000 
 

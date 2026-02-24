@@ -118,7 +118,6 @@ void display_task(void *) {
     // draw_ctx().draw_vec.set_font("Roboto", 15);
 
     LogInfo("Psram size: {}", ps_size);
-    uint32_t start = time_ms();
     uint32_t last_ms = time_ms();
     float dms{};
     float cur_page_offset = page_offset;

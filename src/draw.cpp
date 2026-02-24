@@ -1,5 +1,6 @@
 #include "draw.h"
 #include "log_storage.h"
+#include "ranges_util.h"
 
 #define RECT(x, y, width, height) Line{{x,y}, {x + width, y}}, \
 				  Line{{x + width,y}, {x + width, y + height + 4}}, \
@@ -96,7 +97,7 @@ void draw_pv(Draw &draw, Point center, int height, DrawSettings draw_settings) {
 void draw_battery(Draw &draw, Point center, int height, DrawSettings draw_settings) {
 	static std::array<Line, 5> lines{
 		RECT(-15,  -30, 30, 60),
-		Line{{-10, -35}, {10, -35}}
+		Line{{-10, -40}, {10, -40}}
 	};
 	draw_lines(draw, center, height, draw_settings, lines);
 }
@@ -162,19 +163,138 @@ constexpr int X_PV = 25;
 constexpr int X_BATTERY = X_PV;
 constexpr int X_INVERTER = 50;
 constexpr int X_INV_CONN = 80;
+constexpr int BUBBLE_SPAWN_MS = 500;
 static const Rect IG_VIEW_BOX = {0, 40, X_INV_CONN + 2, 200};
 void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off, 
 	   std::span<InverterGroup> inverter_groups, PowerInfo home, PowerInfo meter) {
 	y_offset = .8 * y_offset + .2 * target_y_offset;
+
+	// integrate power and generate new dots
+	d_last_spawn_ms += time_info.delta_ms;
+	bool spawn_bubbles = d_last_spawn_ms > BUBBLE_SPAWN_MS;
+	if (spawn_bubbles)
+		d_last_spawn_ms -= BUBBLE_SPAWN_MS;
+	float ds = time_info.delta_ms / 1000.f;
+
+
+	home_energy_info.imp_ws += home.imp_w * ds;
+	home_energy_info.exp_ws += home.exp_w * ds;
+	meter_energy_info.imp_ws += meter.exp_w * ds; // is swapped on purpose
+	meter_energy_info.exp_ws += meter.imp_w * ds;
+	if (spawn_bubbles && meter_energy_info.imp_ws > 5) {
+		energy_blobs.push({.energy = meter_energy_info.imp_ws, .x = X_METER, .y = Y_METER, .dir_change = 10000, .end_device_id = GRID_ID, .dir = Direction::DOWN, .pos_flags = PositionFlags::ABSOLUTE});
+	}
+	if (spawn_bubbles && meter_energy_info.exp_ws > 5) {
+		energy_blobs.push({.energy = meter_energy_info.imp_ws, .x = X_GRID, .y = Y_GRID, .dir_change = 10000, .end_device_id = METER_ID, .dir = Direction::UP, .pos_flags = PositionFlags::ABSOLUTE});
+	}
+	const auto generate_bubbles = [&] (EnergyInfo &ei, float x_start, float y_start) {
+		// first distribute to meter and home, then to a inverter
+		float rest = ei.exp_ws;
+		ei.exp_ws = 0;
+		float cur_e = std::min(rest, home_energy_info.imp_ws);
+		if (cur_e > 5) {
+			rest -= cur_e;
+			home_energy_info.imp_ws -= cur_e;
+			energy_blobs.push({.energy = cur_e, .x = x_start, .y = y_start, .dir_change = 10000, .end_device_id = HOME_ID, .dir = Direction::LEFT, .pos_flags = PositionFlags::ABSOLUTE});
+		}
+		cur_e = std::min(rest, meter_energy_info.imp_ws);
+		if (cur_e > 5) {
+			rest -= cur_e;
+			meter_energy_info.imp_ws -= cur_e;
+			energy_blobs.push({.energy = cur_e, .x = x_start, .y = y_start, .dir_change = 10000, .end_device_id = METER_ID, .dir = Direction::LEFT, .pos_flags = PositionFlags::ABSOLUTE});
+		}
+		for (EnergyInfo &ei: energy_infos) {
+			if (rest <= 5)
+				return;
+			cur_e = std::min(rest, ei.imp_ws);
+			if (cur_e <= 5)
+				continue;
+			rest -= cur_e;
+			ei.imp_ws -= cur_e;
+			energy_blobs.push({.energy = cur_e, .x = x_start, .y = y_start, .dir_change = 10000, .end_device_id = ei.device_id, .dir = Direction::LEFT, .pos_flags = PositionFlags::ABSOLUTE});
+		}
+	};
+	if (spawn_bubbles) {
+		generate_bubbles(meter_energy_info, X_METER, Y_METER);
+		generate_bubbles(home_energy_info, X_HOME, Y_HOME);
+	}
+
+	const auto integrate_power = [&] (const PowerInfo &pi) -> EnergyInfo* {
+		if (pi.device_id == -1)
+			return {};
+		EnergyInfo *ei = energy_infos | find{[id = pi.device_id](EnergyInfo& ei) {return id == ei.device_id;}};
+		if (!ei)
+			ei = energy_infos.push();
+		if (!ei) {
+			LogError("Could not allocate new energy info");
+			return {};
+		}
+		ei->imp_ws += pi.imp_w * ds;
+		ei->exp_ws += pi.exp_w * ds;
+		return ei;
+	};
+	{
+		float y_base_f = Y_BUS + inverter_groups.size() * IG_HEIGHT / 2.;
+		for (InverterGroup &ig: inverter_groups) {
+			EnergyInfo *e_inverter = integrate_power(ig.inverter);
+			EnergyInfo *e_pv = integrate_power(ig.pv);
+			EnergyInfo *e_battery = integrate_power(ig.battery);
+			if (spawn_bubbles) {
+				if (e_pv && e_pv->exp_ws > 5) {
+					energy_blobs.push({.energy = e_pv->exp_ws, .x = X_PV, .y = y_base_f + Y_PV_OFF, .dir_change =X_PV, .end_device_id = ig.pv.device_id, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+					e_pv->exp_ws = e_pv->imp_ws = 0;
+				}
+				if (e_battery && e_battery->exp_ws > 5) {
+					energy_blobs.push({.energy = e_battery->exp_ws, .x = X_BATTERY, .y = y_base_f + Y_BATTERY_OFF, .dir_change =X_PV, .end_device_id = ig.pv.device_id, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+					e_battery->exp_ws = 0;
+				}
+				if (e_battery && e_battery->exp_ws > 5) {
+					energy_blobs.push({.energy = e_battery->imp_ws, .x = X_INVERTER, .y = y_base_f + Y_INVERTER_OFF, .dir_change = Y_BATTERY_OFF + y_base_f, .end_device_id = ig.battery.device_id, .dir = Direction::DOWN, .pos_flags = PositionFlags::Y_RELATIVE});
+					e_battery->imp_ws = 0;
+				}
+				// inverter has to match for another sink in the main loop
+				// 1. Search for other inverter which has imported stuff
+				// 2. Search home for import, search smart meter for export
+				if (e_inverter && e_pv->exp_ws > 5) {
+					float x = X_INVERTER;
+					float y = y_base_f + Y_INVERTER_OFF;
+					float rest = e_pv->exp_ws;
+					e_pv->exp_ws = 0;
+					for (auto cur = energy_infos.begin(); rest > 5 && cur < energy_infos.end(); ++cur) {
+						if (cur->imp_ws <= 5)
+							continue;
+						float cur_e = std::min(rest, cur->imp_ws);
+						rest -= cur_e;
+						cur->imp_ws -= cur_e;
+						energy_blobs.push({.energy = cur_e, .x = x, .y = y, .dir_change = X_INV_CONN, .end_device_id = cur->device_id, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+					}
+					float cur_e = std::min(rest, home_energy_info.imp_ws);
+					if (cur_e > 5) {
+						rest -= cur_e;
+						home_energy_info.imp_ws -= cur_e;
+						energy_blobs.push({.energy = cur_e, .x = x, .y = y, .dir_change = X_INV_CONN ,.end_device_id = HOME_ID, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+					}
+					cur_e = std::min(rest, meter_energy_info.imp_ws);
+					if (cur_e > 5) {
+						rest -= cur_e;
+						meter_energy_info.imp_ws -= cur_e;
+						energy_blobs.push({.energy = cur_e, .x = x, .y = y, .dir_change = X_INV_CONN ,.end_device_id = METER_ID, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+					}
+					if (rest > 100)
+						LogWarning("Still got some juice: {}", rest);
+				}
+			}
+			y_base_f -= IG_HEIGHT;
+		}
+	}
+
+	// updating dot graph
+
 	int y_offset = static_cast<int>(this->y_offset);
 	int x_offset = static_cast<int>(x_off + base_offset);
 	if (x_offset >= 239 ||
 	    x_offset + 239 <= 0)
 		return;
-
-        Point pole_pos{X_GRID + x_offset, Y_GRID};
-        Point meter_pos{X_METER + x_offset, Y_METER};
-        Point home_pos{X_HOME + x_offset, Y_HOME};
 
 	// draw paths
 	draw.line({X_INV_CONN + x_offset, Y_BUS}, {X_METER + x_offset, Y_BUS});
@@ -213,6 +333,9 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	}
 
 	// draw icons
+        Point pole_pos{X_GRID + x_offset, Y_GRID};
+        Point meter_pos{X_METER + x_offset, Y_METER};
+        Point home_pos{X_HOME + x_offset, Y_HOME};
         draw_home(draw, home_pos, ICON_HEIGHT, {.background_col = {255,210,100}});
         draw_electric_pole(draw, pole_pos, ICON_HEIGHT, {.col = {255, 255, 255}, .background_col = {100,100,255}});
         draw_smart_meter(draw, meter_pos, ICON_HEIGHT, {.background_col = {200,200,200}});
@@ -249,11 +372,19 @@ bool OverviewPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
+struct MinMax{ float min, max; };
+struct GraphInfo {
+	MinMax x{};
+	static_vector<std::string_view, 16> y_units{};
+	static_vector<MinMax, 16> y_minmax{};
+};
 void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off, std::span<CurveInfo> curve_infos) {
 	int x_offset = int(x_off + base_offset);
 	if (x_offset >= 239 ||
 	    x_offset + 239 <= 0)
 		return;
+
+	// the buttons are only the selectors. The data is set in the main loop according to this->selected_history
 	if (day_button(draw, x_offset)) {
 		selected_history = SelectedHistory::DAY;
 		for (Button *b: buttons)
@@ -272,6 +403,9 @@ void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off, std::span<Cu
 			b->style = ButtonStyle::DEFAULT;
 		year_button.style = ButtonStyle::BORDER;
 	}
+
+	// analyzing the graphs
+	static GraphInfo graph_info;
 }
 bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	for (Button *b: buttons) {
@@ -281,8 +415,13 @@ bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
-void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_offset, settings& settings) {
-
+void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings& settings) {
+	int x_offset = int(x_off + base_offset);
+	if (x_offset >= 239 ||
+	    x_offset + 239 <= 0)
+		return;
+	draw.set_pen(0);
+	draw.text("There shall be settings here", {10 + x_offset, 100}, 150, 2);
 }
 bool SettingsPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
