@@ -20,18 +20,17 @@ struct Line {
 inline Rect operator+(const Rect &r, const Point &p) {return {r.x + p.x, r.y + p.y, r.w, r.h};}
 struct DrawSettings {
 	bool draw_background{true};
-	RGB col{0, 0, 0};
-	RGB background_col{255, 255, 255};
+	uint16_t col{0};
+	uint16_t background_col{0xffff};
 };
 enum SourceSinkType{ HOUSE, GRID, SMART_METER, INVERTER, PV, BATTERY };
 enum Direction{UP, RIGHT, DOWN, LEFT};
-enum PositionFlags{ABSOLUTE, Y_RELATIVE};
 struct EnergyBlobInfo {
 	float energy;
-	float x, y, dir_change;
+	float x, y;
 	int end_device_id;
+	uint16_t col;
 	Direction dir;
-	PositionFlags pos_flags;
 };
 
 struct TouchInfo {
@@ -73,6 +72,7 @@ struct PowerInfo {
 };
 struct EnergyInfo {
 	int device_id;
+	bool is_inverter;
 	float imp_ws;
 	float exp_ws;
 };

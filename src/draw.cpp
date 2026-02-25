@@ -37,10 +37,10 @@ constexpr void draw_hq_circle(Draw &draw, Point center, int height) {
 template<unsigned int N>
 constexpr void draw_lines(Draw &draw, Point center, int height, DrawSettings draw_settings, const std::array<Line, N> &lines) {
 	if (draw_settings.draw_background) {
-		draw.set_pen(draw_settings.background_col.r, draw_settings.background_col.g, draw_settings.background_col.b);
+		draw.set_pen(draw_settings.background_col);
 		draw_hq_circle(draw, center, height);
 	}
-	draw.set_pen(draw_settings.col.r, draw_settings.col.g, draw_settings.col.b);
+	draw.set_pen(draw_settings.col);
 	for (const Line& line: lines)
 		draw.line(center + line.start * height * .01, center + line.end * height * .01);
 }
@@ -146,6 +146,12 @@ bool Button::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
+constexpr uint16_t COL_HOME = RGB{255,210,100}.to_rgb565();
+constexpr uint16_t COL_POLE = RGB{100,100,255}.to_rgb565();
+constexpr uint16_t COL_METER = RGB{200,200,200}.to_rgb565();
+constexpr uint16_t COL_PV = RGB{255,255,100}.to_rgb565();
+constexpr uint16_t COL_INVERTER = RGB{255,100,100}.to_rgb565();
+constexpr uint16_t COL_BATTERY = RGB{50,255,50}.to_rgb565();
 constexpr int ICON_HEIGHT = 30;
 constexpr int IG_HEIGHT = 90;
 constexpr int Y_BUS = 160;
@@ -163,8 +169,9 @@ constexpr int X_PV = 25;
 constexpr int X_BATTERY = X_PV;
 constexpr int X_INVERTER = 50;
 constexpr int X_INV_CONN = 80;
-constexpr int BUBBLE_SPAWN_MS = 500;
+constexpr int BUBBLE_SPAWN_MS = 1000;
 static const Rect IG_VIEW_BOX = {0, 40, X_INV_CONN + 2, 200};
+static const Rect BUBBLE_VIEW_BOX = {0, 40, 240, 200};
 void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off, 
 	   std::span<InverterGroup> inverter_groups, PowerInfo home, PowerInfo meter) {
 	y_offset = .8 * y_offset + .2 * target_y_offset;
@@ -182,12 +189,12 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	meter_energy_info.imp_ws += meter.exp_w * ds; // is swapped on purpose
 	meter_energy_info.exp_ws += meter.imp_w * ds;
 	if (spawn_bubbles && meter_energy_info.imp_ws > 5) {
-		energy_blobs.push({.energy = meter_energy_info.imp_ws, .x = X_METER, .y = Y_METER, .dir_change = 10000, .end_device_id = GRID_ID, .dir = Direction::DOWN, .pos_flags = PositionFlags::ABSOLUTE});
+		energy_blobs.push({.energy = meter_energy_info.imp_ws, .x = X_METER, .y = Y_METER, .end_device_id = GRID_ID, .col = COL_METER, .dir = Direction::DOWN});
 	}
 	if (spawn_bubbles && meter_energy_info.exp_ws > 5) {
-		energy_blobs.push({.energy = meter_energy_info.imp_ws, .x = X_GRID, .y = Y_GRID, .dir_change = 10000, .end_device_id = METER_ID, .dir = Direction::UP, .pos_flags = PositionFlags::ABSOLUTE});
+		energy_blobs.push({.energy = meter_energy_info.exp_ws, .x = X_GRID, .y = Y_GRID, .end_device_id = METER_ID, .col = COL_POLE, .dir = Direction::UP});
 	}
-	const auto generate_bubbles = [&] (EnergyInfo &ei, float x_start, float y_start) {
+	const auto generate_bubbles = [&] (EnergyInfo &ei, float x_start, float y_start, uint16_t col) {
 		// first distribute to meter and home, then to a inverter
 		float rest = ei.exp_ws;
 		ei.exp_ws = 0;
@@ -195,15 +202,17 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 		if (cur_e > 5) {
 			rest -= cur_e;
 			home_energy_info.imp_ws -= cur_e;
-			energy_blobs.push({.energy = cur_e, .x = x_start, .y = y_start, .dir_change = 10000, .end_device_id = HOME_ID, .dir = Direction::LEFT, .pos_flags = PositionFlags::ABSOLUTE});
+			energy_blobs.push({.energy = cur_e, .x = x_start - 1, .y = y_start, .end_device_id = HOME_ID, .col = col, .dir = Direction::LEFT});
 		}
 		cur_e = std::min(rest, meter_energy_info.imp_ws);
 		if (cur_e > 5) {
 			rest -= cur_e;
 			meter_energy_info.imp_ws -= cur_e;
-			energy_blobs.push({.energy = cur_e, .x = x_start, .y = y_start, .dir_change = 10000, .end_device_id = METER_ID, .dir = Direction::LEFT, .pos_flags = PositionFlags::ABSOLUTE});
+			energy_blobs.push({.energy = cur_e, .x = x_start - 1, .y = y_start, .end_device_id = METER_ID, .col = col, .dir = Direction::LEFT});
 		}
 		for (EnergyInfo &ei: energy_infos) {
+			if (!ei.is_inverter)
+				continue;
 			if (rest <= 5)
 				return;
 			cur_e = std::min(rest, ei.imp_ws);
@@ -211,23 +220,25 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 				continue;
 			rest -= cur_e;
 			ei.imp_ws -= cur_e;
-			energy_blobs.push({.energy = cur_e, .x = x_start, .y = y_start, .dir_change = 10000, .end_device_id = ei.device_id, .dir = Direction::LEFT, .pos_flags = PositionFlags::ABSOLUTE});
+			energy_blobs.push({.energy = cur_e, .x = x_start - 1, .y = y_start, .end_device_id = ei.device_id, .col = col, .dir = Direction::LEFT});
 		}
 	};
 	if (spawn_bubbles) {
-		generate_bubbles(meter_energy_info, X_METER, Y_METER);
-		generate_bubbles(home_energy_info, X_HOME, Y_HOME);
+		generate_bubbles(meter_energy_info, X_METER, Y_METER, COL_METER);
+		generate_bubbles(home_energy_info, X_HOME, Y_HOME, COL_HOME);
 	}
 
-	const auto integrate_power = [&] (const PowerInfo &pi) -> EnergyInfo* {
+	const auto integrate_power = [&] (const PowerInfo &pi, bool is_inverter = false) -> EnergyInfo* {
 		if (pi.device_id == -1)
 			return {};
 		EnergyInfo *ei = energy_infos | find{[id = pi.device_id](EnergyInfo& ei) {return id == ei.device_id;}};
-		if (!ei)
-			ei = energy_infos.push();
 		if (!ei) {
-			LogError("Could not allocate new energy info");
-			return {};
+			ei = energy_infos.push();
+			if (!ei) {
+				LogError("Could not allocate new energy info");
+				return {};
+			}
+			*ei = {.device_id = pi.device_id, .is_inverter = is_inverter};
 		}
 		ei->imp_ws += pi.imp_w * ds;
 		ei->exp_ws += pi.exp_w * ds;
@@ -236,49 +247,52 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	{
 		float y_base_f = Y_BUS + inverter_groups.size() * IG_HEIGHT / 2.;
 		for (InverterGroup &ig: inverter_groups) {
-			EnergyInfo *e_inverter = integrate_power(ig.inverter);
+			EnergyInfo *e_inverter = integrate_power(ig.inverter, true);
 			EnergyInfo *e_pv = integrate_power(ig.pv);
 			EnergyInfo *e_battery = integrate_power(ig.battery);
 			if (spawn_bubbles) {
 				if (e_pv && e_pv->exp_ws > 5) {
-					energy_blobs.push({.energy = e_pv->exp_ws, .x = X_PV, .y = y_base_f + Y_PV_OFF, .dir_change =X_PV, .end_device_id = ig.pv.device_id, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+					energy_blobs.push({.energy = e_pv->exp_ws, .x = X_PV + 1, .y = y_base_f + Y_PV_OFF, .end_device_id = ig.inverter.device_id, .col = COL_PV, .dir = Direction::RIGHT});
+					LogInfo("Pushed pv for now size: {}", energy_blobs.size());
 					e_pv->exp_ws = e_pv->imp_ws = 0;
 				}
 				if (e_battery && e_battery->exp_ws > 5) {
-					energy_blobs.push({.energy = e_battery->exp_ws, .x = X_BATTERY, .y = y_base_f + Y_BATTERY_OFF, .dir_change =X_PV, .end_device_id = ig.pv.device_id, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+					energy_blobs.push({.energy = e_battery->exp_ws, .x = X_BATTERY + 1, .y = y_base_f + Y_BATTERY_OFF, .end_device_id = ig.inverter.device_id, .col = COL_BATTERY, .dir = Direction::RIGHT});
 					e_battery->exp_ws = 0;
 				}
-				if (e_battery && e_battery->exp_ws > 5) {
-					energy_blobs.push({.energy = e_battery->imp_ws, .x = X_INVERTER, .y = y_base_f + Y_INVERTER_OFF, .dir_change = Y_BATTERY_OFF + y_base_f, .end_device_id = ig.battery.device_id, .dir = Direction::DOWN, .pos_flags = PositionFlags::Y_RELATIVE});
+				if (e_battery && e_battery->imp_ws > 5) {
+					energy_blobs.push({.energy = e_battery->imp_ws, .x = X_INVERTER, .y = y_base_f + Y_INVERTER_OFF + 1, .end_device_id = ig.battery.device_id, .col = COL_INVERTER, .dir = Direction::DOWN});
 					e_battery->imp_ws = 0;
 				}
 				// inverter has to match for another sink in the main loop
 				// 1. Search for other inverter which has imported stuff
 				// 2. Search home for import, search smart meter for export
-				if (e_inverter && e_pv->exp_ws > 5) {
+				if (e_inverter && e_inverter->exp_ws > 5) {
 					float x = X_INVERTER;
 					float y = y_base_f + Y_INVERTER_OFF;
-					float rest = e_pv->exp_ws;
-					e_pv->exp_ws = 0;
+					float rest = e_inverter->exp_ws;
+					e_inverter->exp_ws = 0;
 					for (auto cur = energy_infos.begin(); rest > 5 && cur < energy_infos.end(); ++cur) {
+						if (!cur->is_inverter)
+							continue;
 						if (cur->imp_ws <= 5)
 							continue;
 						float cur_e = std::min(rest, cur->imp_ws);
 						rest -= cur_e;
 						cur->imp_ws -= cur_e;
-						energy_blobs.push({.energy = cur_e, .x = x, .y = y, .dir_change = X_INV_CONN, .end_device_id = cur->device_id, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+						energy_blobs.push({.energy = cur_e, .x = x + 1, .y = y, .end_device_id = cur->device_id, .col = COL_INVERTER, .dir = Direction::RIGHT});
 					}
 					float cur_e = std::min(rest, home_energy_info.imp_ws);
 					if (cur_e > 5) {
 						rest -= cur_e;
 						home_energy_info.imp_ws -= cur_e;
-						energy_blobs.push({.energy = cur_e, .x = x, .y = y, .dir_change = X_INV_CONN ,.end_device_id = HOME_ID, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+						energy_blobs.push({.energy = cur_e, .x = x + 1, .y = y, .end_device_id = HOME_ID, .col = COL_INVERTER, .dir = Direction::RIGHT});
 					}
 					cur_e = std::min(rest, meter_energy_info.imp_ws);
 					if (cur_e > 5) {
 						rest -= cur_e;
 						meter_energy_info.imp_ws -= cur_e;
-						energy_blobs.push({.energy = cur_e, .x = x, .y = y, .dir_change = X_INV_CONN ,.end_device_id = METER_ID, .dir = Direction::RIGHT, .pos_flags = PositionFlags::Y_RELATIVE});
+						energy_blobs.push({.energy = cur_e, .x = x + 1, .y = y, .end_device_id = METER_ID, .col = COL_INVERTER, .dir = Direction::RIGHT});
 					}
 					if (rest > 100)
 						LogWarning("Still got some juice: {}", rest);
@@ -288,7 +302,132 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 		}
 	}
 
-	// updating dot graph
+	// advancing energy dots
+	constexpr float SPEED = .02; // in pixels per miliseconds
+	const float dist = SPEED * time_info.delta_ms;
+	for (EnergyBlobInfo &blob: energy_blobs) {
+		if (blob.x > 300 || blob.x < -100 || blob.y > 300 || blob.y < -100) {
+			LogError("Removing stray dot");
+			blob.end_device_id = -1;
+			continue;
+		}
+		float goal_x = INFINITY, goal_y = INFINITY;
+		if (blob.end_device_id == METER_ID) {goal_x = X_METER; goal_y = Y_METER;}
+		if (blob.end_device_id == HOME_ID) {goal_x = X_HOME; goal_y = Y_HOME;}
+		if (blob.end_device_id == GRID_ID) {goal_x = X_GRID; goal_y = Y_GRID;}
+		float y_base_f = Y_BUS + inverter_groups.size() * IG_HEIGHT / 2.;
+		for (const InverterGroup &ig: inverter_groups) {
+			if (!std::isinf(goal_x))
+				break;
+			if (ig.inverter.device_id == blob.end_device_id) 
+				{goal_x = X_INVERTER; goal_y = y_base_f + Y_INVERTER_OFF;}
+			if (ig.pv.device_id == blob.end_device_id) 
+				{goal_x = X_PV; goal_y = y_base_f + Y_PV_OFF;}
+			if (ig.battery.device_id == blob.end_device_id) 
+				{goal_x = X_BATTERY; goal_y = y_base_f + Y_BATTERY_OFF;}
+			y_base_f -= IG_HEIGHT;
+		}
+		if (std::isinf(goal_x)) {
+			LogError("Did not find goal device");
+			blob.end_device_id = -1; // marks for removal
+			continue;
+		}
+		float prev_x = blob.x;
+		float prev_y = blob.y;
+		if (std::abs(goal_x - blob.x) + std::abs(goal_y - blob.y) < 3) {
+			blob.end_device_id = -1; // marks for removal
+			continue;
+		}
+		const auto crossed = [](float cur, float prev, float val) {return (cur < val && prev >= val) || (cur >= val && prev < val);};
+		if (blob.x == X_INV_CONN && goal_x > X_INV_CONN) // correct goal value for blobs on the inverter bus
+			blob.dir = blob.y + y_offset < Y_BUS ? Direction::DOWN: Direction::UP;
+		switch(blob.dir) {
+			case Direction::UP:
+				blob.y -= dist; 
+				if (goal_x > blob.x && blob.x == X_INV_CONN && 
+					crossed(blob.y + y_offset, prev_y + y_offset, Y_BUS)) { // go onto bus
+					blob.x += std::abs(blob.y + y_offset - Y_BUS);
+					blob.y = Y_BUS;
+					blob.dir = Direction::RIGHT;
+				} else if (prev_y > goal_y && blob.y <= goal_y) { // reached target branch
+					int x_mult = blob.x < goal_x ? 1: -1;
+					blob.x += x_mult * std::abs(blob.y - goal_y);
+					blob.y = goal_y;
+					blob.dir = blob.x < goal_x ? Direction::RIGHT: Direction::LEFT;
+				}
+				break;
+			case Direction::RIGHT:	
+				blob.x += dist;
+				if (crossed(blob.x, prev_x, goal_x)) {
+					int y_mult = blob.y < goal_y ? 1: -1;
+					blob.y += y_mult * std::abs(blob.x - goal_x);
+					blob.x = goal_x;
+					blob.dir = blob.y < goal_y ? Direction::DOWN: Direction::UP;
+				} else if (blob.end_device_id == HOME_ID && crossed(blob.x, prev_x, X_HOME_CONN)) {
+					blob.y -= std::abs(blob.x - X_HOME_CONN);
+					blob.x = X_HOME_CONN;
+					blob.dir = Direction::UP;
+				} else if (crossed(blob.x, prev_x, X_INV_CONN)) {
+					if (goal_x < X_INV_CONN) { // stay in scroll region
+						int y_mult = blob.y < goal_y ? 1: -1;
+						blob.y += y_mult * std::abs(blob.x - X_INV_CONN);
+						blob.x = X_INV_CONN;
+						blob.dir = blob.y < goal_y ? Direction::DOWN: Direction::UP;
+					} else {
+						float g_y = blob.y + y_offset;
+						int y_mult = g_y < goal_y ? 1: -1;
+						blob.y += y_mult * std::abs(blob.x - X_INV_CONN);
+						blob.x = X_INV_CONN;
+						blob.dir = g_y < goal_y ? Direction::DOWN: Direction::UP;
+					}
+				}
+				break;
+			case Direction::DOWN:
+				blob.y += dist;
+				if (blob.x == X_HOME_CONN && crossed(blob.y, prev_y, Y_BUS)) {
+					int x_mult = blob.x < goal_x ? 1: -1;
+					blob.x += x_mult * std::abs(blob.y - Y_BUS);
+					blob.y = Y_BUS;
+					blob.dir = blob.x < goal_x ? Direction::RIGHT: Direction::LEFT;
+				} else if (goal_x > X_INV_CONN && crossed(blob.y + y_offset, prev_y + y_offset, Y_BUS)) {
+					blob.x += std::abs(blob.y + y_offset - Y_BUS);
+					blob.y = Y_BUS;
+					blob.dir = Direction::RIGHT;
+				} else if ((blob.x != X_INV_CONN || goal_x <= X_INV_CONN) && crossed(blob.y, prev_y, goal_y)) {
+					int x_mult = blob.x < goal_x ? 1: -1;
+					blob.x += x_mult + std::abs(blob.y - goal_y);
+					blob.y = goal_y;
+					blob.dir = blob.x < goal_x ? Direction::RIGHT: Direction::LEFT;
+				}
+				break;
+			case Direction::LEFT:
+				blob.x -= dist; 
+				if (blob.y == Y_HOME && crossed(blob.x, prev_x, X_HOME_CONN)) {
+					blob.y += std::abs(blob.x - X_HOME_CONN);
+					blob.x = X_HOME_CONN;
+					blob.dir = Direction::DOWN;
+				} else if (blob.end_device_id == HOME_ID && crossed(blob.x, prev_x, X_HOME_CONN)) {
+					blob.y -= std::abs(blob.x - X_HOME_CONN);
+					blob.x = X_HOME_CONN;
+					blob.dir = Direction::UP;
+				} else if (crossed(blob.x, prev_x, X_INV_CONN)) {
+					int y_mult = goal_y + y_offset > Y_BUS ? 1: -1;
+					blob.y = Y_BUS - y_offset + y_mult * std::abs(blob.x - X_INV_CONN);
+					blob.x = Y_BUS;
+					blob.dir = blob.y < goal_y ? Direction::DOWN: Direction::UP;
+				} else if (blob.end_device_id != HOME_ID && crossed(blob.x, prev_x, goal_x)) {
+					int y_mult = blob.y < goal_y ? 1: -1;
+					blob.y += y_mult * std::abs(blob.x - goal_x);
+					blob.x = goal_x;
+					blob.dir = blob.y < goal_y ? Direction::DOWN: Direction::UP;
+				}
+				break;
+		}
+	}
+	// remove stale points
+	for (int i = energy_blobs.rev_start_idx(); i >= 0; --i)
+		if (energy_blobs[i].end_device_id == -1)
+			energy_blobs[i] = *energy_blobs.pop();
 
 	int y_offset = static_cast<int>(this->y_offset);
 	int x_offset = static_cast<int>(x_off + base_offset);
@@ -332,24 +471,39 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 		draw.remove_clip();
 	}
 
+	// draw energy blobs
+	draw.set_clip(BUBBLE_VIEW_BOX + Point{x_offset, 0});
+	for (const EnergyBlobInfo &blob: energy_blobs) {
+		float y = blob.y;
+		if (blob.x <= X_INV_CONN) {
+			y += y_offset;
+			if (spawn_bubbles)
+				LogInfo("Trying to spawn bubble {}, {}, orig_y: {}", blob.x, y, blob.y);
+		}
+		draw.set_pen(blob.col);
+		draw_hq_circle(draw, {int(blob.x + x_offset), int(y)}, .2 * std::sqrt(blob.energy));
+	}
+	draw.remove_clip();
+	draw.set_pen(0);
+
 	// draw icons
         Point pole_pos{X_GRID + x_offset, Y_GRID};
         Point meter_pos{X_METER + x_offset, Y_METER};
         Point home_pos{X_HOME + x_offset, Y_HOME};
-        draw_home(draw, home_pos, ICON_HEIGHT, {.background_col = {255,210,100}});
-        draw_electric_pole(draw, pole_pos, ICON_HEIGHT, {.col = {255, 255, 255}, .background_col = {100,100,255}});
-        draw_smart_meter(draw, meter_pos, ICON_HEIGHT, {.background_col = {200,200,200}});
+        draw_home(draw, home_pos, ICON_HEIGHT, {.background_col = COL_HOME});
+        draw_electric_pole(draw, pole_pos, ICON_HEIGHT, {.col = 0xffff, .background_col = COL_POLE});
+        draw_smart_meter(draw, meter_pos, ICON_HEIGHT, {.background_col = COL_METER});
 	if (inverter_groups.size()) {
 		float y_base_f = Y_BUS + inverter_groups.size() * IG_HEIGHT / 2.;
 		draw.set_clip(IG_VIEW_BOX + Point{x_offset, 0});
 		for (const InverterGroup &ig: inverter_groups) {
 			int y_base = static_cast<int>(y_base_f);
 			Point p{X_PV + x_offset, y_base + Y_PV_OFF + y_offset};
-			draw_pv(draw, p, ICON_HEIGHT, {.background_col = {255,255,100}});
+			draw_pv(draw, p, ICON_HEIGHT, {.background_col = COL_PV});
 			p = {X_INVERTER + x_offset, y_base + Y_INVERTER_OFF + y_offset};
-			draw_inverter(draw, p, ICON_HEIGHT, {.background_col = {255,100,100}});
+			draw_inverter(draw, p, ICON_HEIGHT, {.background_col = COL_INVERTER});
 			p = {X_BATTERY + x_offset, y_base + Y_BATTERY_OFF + y_offset};
-			draw_battery(draw, p, ICON_HEIGHT, {.background_col = {50,255,50}});
+			draw_battery(draw, p, ICON_HEIGHT, {.background_col = COL_BATTERY});
 			y_base_f -= IG_HEIGHT;
 		}
 		draw.remove_clip();

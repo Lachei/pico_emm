@@ -91,21 +91,24 @@ static std::atomic<float> page_offset;
 
 static std::array<InverterGroup, 3> test_groups{
     InverterGroup {
-        .inverter = {.imp_w = 0, .exp_w = 1000},
-        .pv = {.imp_w = 0, .exp_w = 1100},
-        .battery = {.imp_w = 100, .exp_w = 0}
+        .inverter = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
+        .pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1100},
+        .battery = {.device_id = get_next_device_id(), .imp_w = 100, .exp_w = 0}
     },
     InverterGroup {
-        .inverter = {.imp_w = 0, .exp_w = 1000},
-        .pv = {.imp_w = 0, .exp_w = 1100},
-        .battery = {.imp_w = 100, .exp_w = 0}
+        .inverter = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
+        .pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1600},
+        .battery = {.device_id = get_next_device_id(), .imp_w = 600, .exp_w = 0}
     },
     InverterGroup {
-        .inverter = {.imp_w = 0, .exp_w = 1000},
-        .pv = {.imp_w = 0, .exp_w = 1100},
-        .battery = {.imp_w = 100, .exp_w = 0}
+        .inverter = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
+        .pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1100},
+        .battery = {.device_id = get_next_device_id(), .imp_w = 100, .exp_w = 0}
     },
 };
+
+static PowerInfo meter_power {.device_id = METER_ID, .imp_w = 1000, .exp_w = 0};
+static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 4800, .exp_w = 0};
 
 std::array<std::string_view, 4> texts{"Hello darkness", "my old friend,", "shall peace and glory", "thy remove"};
 void display_task(void *) {
@@ -145,7 +148,7 @@ void display_task(void *) {
         // draw_ctx().draw.text(texts[ms / 3000 % texts.size()], {30 + x_off, 30 + y_off}, 240);
         draw_ctx().draw.set_pen(0);
         draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
-        overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_groups, {}, {});
+        overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_groups, home_power, meter_power);
         history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, {});
         settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default());
         screen().set_framebuffer(draw_ctx().frame_buffer());

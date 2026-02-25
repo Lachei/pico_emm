@@ -58,6 +58,7 @@ template<typename T, int N>
 struct static_vector {
 	std::array<T, N> storage{};
 	int cur_size{};
+	constexpr T& operator[](int i) { return storage[std::min(i, N)]; }
 	constexpr T* begin() { return storage.begin(); }
 	constexpr T* end() { return storage.begin() + cur_size; }
 	constexpr const T* begin() const { return storage.begin(); }
@@ -65,12 +66,14 @@ struct static_vector {
 	constexpr T* push() { if (cur_size >= N) return {}; return storage.data() + cur_size++; }
 	constexpr bool push(const T& e) { if (cur_size == N) return false; storage[cur_size++] = e; return true; }
 	constexpr bool push(T&& e) { if (cur_size == N) return false; storage[cur_size++] = std::move(e); return true; }
+	constexpr T* pop() { cur_size -= 1; return cur_size >= 0 ? begin() + cur_size: nullptr; }
 	template<typename F>
 	constexpr void remove_if(F &&f) { for (int i = cur_size - 1; i >= 0; --i) if( f(storage[i]) ) { std::swap(storage[i], storage[cur_size - 1]); --cur_size; } }
 	constexpr void clear() { cur_size = 0; }
 	constexpr bool empty() const { return cur_size == 0; }
 	constexpr int size() const { return cur_size; }
 	constexpr void sanitize() { if (cur_size > N || cur_size < 0) cur_size = 0; }
+	constexpr int rev_start_idx() const { return cur_size - 1; }
 };
 
 template<typename T, int N>
