@@ -1,11 +1,13 @@
 #include "draw.h"
 #include "log_storage.h"
 #include "ranges_util.h"
+#include "ntp_client.h"
 
-#define RECT(x, y, width, height) Line{{x,y}, {x + width, y}}, \
-				  Line{{x + width,y}, {x + width, y + height + 4}}, \
+#define RECTE(x, y, width, height, e) Line{{x,y}, {x + width, y}}, \
+				  Line{{x + width,y}, {x + width, y + height + e}}, \
 				  Line{{x + width,y + height}, {x, y + height}}, \
 				  Line{{x,y + height}, {x, y}}
+#define RECT(x, y, width, height) RECTE(x, y, width, height, 4)
 #define TRAY(x, y, width, height) Line{{x + width,y}, {x + width, y + height + 4}}, \
 				  Line{{x + width,y + height}, {x, y + height}}, \
 				  Line{{x,y + height}, {x, y}}
@@ -146,6 +148,8 @@ bool Button::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
+bool Button::is_selected() const { return style == ButtonStyle::BORDER; }
+
 constexpr uint16_t COL_HOME = RGB{255,210,100}.to_rgb565();
 constexpr uint16_t COL_POLE = RGB{100,100,255}.to_rgb565();
 constexpr uint16_t COL_METER = RGB{200,200,200}.to_rgb565();
@@ -253,7 +257,6 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 			if (spawn_bubbles) {
 				if (e_pv && e_pv->exp_ws > 5) {
 					energy_blobs.push({.energy = e_pv->exp_ws, .x = X_PV + 1, .y = y_base_f + Y_PV_OFF, .end_device_id = ig.inverter.device_id, .col = COL_PV, .dir = Direction::RIGHT});
-					LogInfo("Pushed pv for now size: {}", energy_blobs.size());
 					e_pv->exp_ws = e_pv->imp_ws = 0;
 				}
 				if (e_battery && e_battery->exp_ws > 5) {
@@ -303,7 +306,7 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	}
 
 	// advancing energy dots
-	constexpr float SPEED = .02; // in pixels per miliseconds
+	constexpr float SPEED = .03; // in pixels per miliseconds
 	const float dist = SPEED * time_info.delta_ms;
 	for (EnergyBlobInfo &blob: energy_blobs) {
 		if (blob.x > 300 || blob.x < -100 || blob.y > 300 || blob.y < -100) {
@@ -349,7 +352,7 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 					blob.x += std::abs(blob.y + y_offset - Y_BUS);
 					blob.y = Y_BUS;
 					blob.dir = Direction::RIGHT;
-				} else if (prev_y > goal_y && blob.y <= goal_y) { // reached target branch
+				} else if ((blob.x != X_INV_CONN || goal_x <= X_INV_CONN) && prev_y > goal_y && blob.y <= goal_y) { // reached target branch
 					int x_mult = blob.x < goal_x ? 1: -1;
 					blob.x += x_mult * std::abs(blob.y - goal_y);
 					blob.y = goal_y;
@@ -477,8 +480,6 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 		float y = blob.y;
 		if (blob.x <= X_INV_CONN) {
 			y += y_offset;
-			if (spawn_bubbles)
-				LogInfo("Trying to spawn bubble {}, {}, orig_y: {}", blob.x, y, blob.y);
 		}
 		draw.set_pen(blob.col);
 		draw_hq_circle(draw, {int(blob.x + x_offset), int(y)}, .2 * std::sqrt(blob.energy));
@@ -526,12 +527,13 @@ bool OverviewPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
-struct MinMax{ float min, max; };
+struct MinMax { float min, max; };
+struct UnitInfo {std::string_view name; MinMax bounds;};
 struct GraphInfo {
 	MinMax x{};
-	static_vector<std::string_view, 16> y_units{};
-	static_vector<MinMax, 16> y_minmax{};
+	static_vector<UnitInfo, 16> units{};
 };
+static const Rect PLOT_RECT{10, 60, 220, 170};
 void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off, std::span<CurveInfo> curve_infos) {
 	int x_offset = int(x_off + base_offset);
 	if (x_offset >= 239 ||
@@ -541,31 +543,126 @@ void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off, std::span<Cu
 	// the buttons are only the selectors. The data is set in the main loop according to this->selected_history
 	if (day_button(draw, x_offset)) {
 		selected_history = SelectedHistory::DAY;
-		for (Button *b: buttons)
+		for (Button *b: time_buttons)
 			b->style = ButtonStyle::DEFAULT;
 		day_button.style = ButtonStyle::BORDER;
 	}
 	if (month_button(draw, x_offset)) {
 		selected_history = SelectedHistory::MONTH;
-		for (Button *b: buttons)
+		for (Button *b: time_buttons)
 			b->style = ButtonStyle::DEFAULT;
 		month_button.style = ButtonStyle::BORDER;
 	}
 	if (year_button(draw, x_offset)) {
 		selected_history = SelectedHistory::YEAR;
-		for (Button *b: buttons)
+		for (Button *b: time_buttons)
 			b->style = ButtonStyle::DEFAULT;
 		year_button.style = ButtonStyle::BORDER;
 	}
+	if (net_power_button(draw, x_offset)) {
+		net_power_button.style = net_power_button.is_selected() ? ButtonStyle::DEFAULT: ButtonStyle::BORDER;
+	}
 
 	// analyzing the graphs
-	static GraphInfo graph_info;
+	static GraphInfo graph_info{};
+	// switch (selected_history) {
+	// 	case SelectedHistory::DAY: graph_info.x.min = 0; graph_info.x.max = 24;break;
+	// 	case SelectedHistory::MONTH: graph_info.x.min = ;break;
+	// 	case SelectedHistory::YEAR: ;break;
+	// }
+	graph_info.units.clear();
+	const auto get_or_insert_unit = [] (std::string_view name, GraphInfo &graph_info) -> UnitInfo* {
+		UnitInfo *y_unit = graph_info.units | find{[&](const UnitInfo &unit) { return unit.name == name;}};
+		if (!y_unit) {
+			if (!graph_info.units.push({.name = name}))
+				return nullptr;
+			y_unit = graph_info.units.back();
+		}
+		return y_unit;
+	};
+	for (CurveInfo &ci: curve_infos) {
+		UnitInfo *y_unit = get_or_insert_unit(ci.unit_name, graph_info);
+		if (!y_unit) {
+			LogError("Failed to get and create unit {}", ci.unit_name);
+			continue;
+		}
+		y_unit->bounds.min = std::min(ci.min_val, y_unit->bounds.min);
+		y_unit->bounds.max = std::max(ci.max_val, y_unit->bounds.max);
+	}
+
+	// checking for derived curve
+	if (net_power_button.is_selected()) {
+		CurveInfo *producing = curve_infos | find{[](const CurveInfo &ci){ return ci.name == "Erzeugung"; }};
+		CurveInfo *consuming = curve_infos | find{[](const CurveInfo &ci){ return ci.name == "Verbrauch"; }};
+		if (producing && consuming) {
+			int s = std::max(producing->data.size(), producing->data.size());
+			derived_curve.data.resize(s);
+			derived_curve.min_val = derived_curve.max_val = 0;
+			derived_curve.unit_name = "W";
+			for (int i: range(s)) {
+				int16_t prod = i < producing->data.size() ? producing->data[i]: 0;
+				int16_t con = i < consuming->data.size() ? consuming->data[i]: 0;
+				derived_curve.data[i] = prod - con;
+				derived_curve.min_val = std::min<float>(derived_curve.min_val, derived_curve.data[i]);
+				derived_curve.max_val = std::max<float>(derived_curve.max_val, derived_curve.data[i]);
+			}
+			UnitInfo *y_unit = get_or_insert_unit("W", graph_info);
+			if (y_unit) {
+				y_unit->bounds.min = std::min(y_unit->bounds.min, derived_curve.min_val);
+				y_unit->bounds.max = std::max(y_unit->bounds.max, derived_curve.max_val);
+			}
+			derived_curve.color = RGB{180, 180, 180}.to_rgb565();
+		} else 
+			LogError("Didnt find necessary curves");
+	}
+
+	// aligning 0 line for all min-max values: Get highest 0 line, adopt all max min vals to get the same 0 line
+	float zero_line = 0;
+	for (const UnitInfo &ui: graph_info.units)
+		zero_line = std::max(zero_line, (-ui.bounds.min) / (ui.bounds.max - ui.bounds.min));
+	for (UnitInfo &ui: graph_info.units)
+		ui.bounds.min = zero_line * ui.bounds.max / (zero_line - 1);
+	int zero_line_y = int((.8 * (1. - zero_line) + .1) * PLOT_RECT.h + PLOT_RECT.y);
+
+	// drawing graphs (always are drawn with common 0)
+	Point offset{x_offset, 0};
+	draw.set_pen(0);
+	for (const Line& l: {RECTE(PLOT_RECT.x, PLOT_RECT.y, PLOT_RECT.w, PLOT_RECT.h, 1)})
+		draw.line(l.start + offset, l.end + offset);
+	const auto draw_curve = [&](const CurveInfo &ci, GraphInfo &graph_info) {
+		UnitInfo *unit = get_or_insert_unit(ci.unit_name, graph_info);
+		if (!unit) {
+			LogError("Cant draw unit {}", ci.unit_name);
+			return;
+		}
+		MinMax m = unit->bounds;
+		float d = m.max - m.min;
+		m.min -= d * .125;
+		m.max += d * .125;
+		d = m.max - m.min;
+		draw.set_pen(ci.color);
+		for (int i: range(ci.data.size() - 1)) {
+			int x_start = int((float(i) / (ci.data.size() - 1)) * PLOT_RECT.w + PLOT_RECT.x);
+			int x_end = int((float(i + 1) / (ci.data.size() - 1)) * PLOT_RECT.w + PLOT_RECT.x) + 1;
+			int y_start = int((1. - (ci.data[i] - m.min) / d) * PLOT_RECT.h + PLOT_RECT.y);
+			int y_end = int((1. - (ci.data[i + 1] - m.min) / d) * PLOT_RECT.h + PLOT_RECT.y);
+			draw.line({x_start + x_offset, y_start}, {x_end + x_offset, y_end});
+		}
+	};
+	for (CurveInfo &ci: curve_infos)
+		draw_curve(ci, graph_info);
+	if (net_power_button.is_selected())
+		draw_curve(derived_curve, graph_info);
+	draw.set_pen(RGB{180, 0, 0}.to_rgb565());
+	draw.line({PLOT_RECT.x + x_offset, zero_line_y}, {PLOT_RECT.x + PLOT_RECT.w + x_offset, zero_line_y});
 }
 bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
-	for (Button *b: buttons) {
+	for (Button *b: time_buttons) {
 		if (b->handle_touch_input(touch_info, base_offset + x_offset))
 			return true;
 	}
+	if (net_power_button.handle_touch_input(touch_info, base_offset + x_offset))
+		return true;
 	return false;
 }
 
@@ -574,10 +671,58 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings& s
 	if (x_offset >= 239 ||
 	    x_offset + 239 <= 0)
 		return;
+
 	draw.set_pen(0);
-	draw.text("There shall be settings here", {10 + x_offset, 100}, 150, 2);
+	draw.text("Verbundene Geräte:", {10 + x_offset, 30}, 100, 1);
+	// TODO: readout and draw connected devices
+	
+	draw.text("Konfigurierte Geräte:", {10 + x_offset, 60}, 100, 1);
+	// TODO: readout and draw configured devices that are not connected
+
+	draw.text("Neues Gerät konfigurieren:", {10 + x_offset, 160}, 140, 1);
+	
+	for (IpButton *ip_button: ip_buttons) {
+		if (!ip_button->button(draw, x_offset)) 
+			continue;
+
+		for (IpButton *b: ip_buttons)
+			b->button.style = ButtonStyle::DEFAULT;
+		ip_button->button.style = ButtonStyle::BORDER;
+		selected_ip = ip_button;
+	}
+	if (configure_button(draw, x_offset)) {
+		// TODO: add to stored configurations
+	}
+	const auto le = [] (char c, int i) { if (c == '0') return true; return (c - '1') <= i - 1; };
+	for (Button *button: number_inputs) {
+		if (!button->show(draw, x_offset))
+			continue;
+		if (button == &ix) {
+			selected_ip->str.pop();
+			selected_ip->button.text = selected_ip->str.sv();
+		} else {
+			// safety checks for valid ipv4 part
+			int s = selected_ip->str.size();
+			std::string_view t = selected_ip->str.sv();
+			bool can_append = s < 2 ||
+					(s == 2 && le(t[0], 2) && (le(t[0], 1) || 
+						(le(t[1], 5) && (le(t[1], 4) || le(button->text[0], 5)))));
+			if (can_append) {
+				selected_ip->str.append(button->text);
+				selected_ip->button.text = selected_ip->str.sv();
+			}
+		}
+	}
 }
 bool SettingsPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
+	for (IpButton *b: ip_buttons)
+		if (b->button.handle_touch_input(touch_info, base_offset + x_offset))
+			return true;
+	if (configure_button.handle_touch_input(touch_info, base_offset + x_offset))
+		return true;
+	for (Button *b: number_inputs)
+		if (b->handle_touch_input(touch_info, base_offset + x_offset))
+			return true;
 	return false;
 }
 

@@ -29,6 +29,11 @@ struct static_string {
 			return;
 		storage[cur_size++] = c;
 	}
+	constexpr char* pop() {
+		if (cur_size <= 0)
+			return nullptr;
+		return data() + --cur_size;
+	}
 	template<typename... Args>
 	constexpr int fill_formatted(std::format_string<Args...> fmt, Args&&... args) { 
 		auto info = std::format_to_n(storage.data(), storage.size(), fmt, std::forward<Args>(args)...); 
@@ -56,13 +61,16 @@ struct static_string {
 
 template<typename T, int N>
 struct static_vector {
+	using value_type = T;
 	std::array<T, N> storage{};
 	int cur_size{};
 	constexpr T& operator[](int i) { return storage[std::min(i, N)]; }
+	constexpr const T& operator[](int i) const { return storage[std::min(i, N)]; }
 	constexpr T* begin() { return storage.begin(); }
 	constexpr T* end() { return storage.begin() + cur_size; }
 	constexpr const T* begin() const { return storage.begin(); }
 	constexpr const T* end() const { return storage.begin() + cur_size; }
+	constexpr T* back() { return cur_size ? end() - 1: nullptr; }
 	constexpr T* push() { if (cur_size >= N) return {}; return storage.data() + cur_size++; }
 	constexpr bool push(const T& e) { if (cur_size == N) return false; storage[cur_size++] = e; return true; }
 	constexpr bool push(T&& e) { if (cur_size == N) return false; storage[cur_size++] = std::move(e); return true; }
@@ -72,12 +80,14 @@ struct static_vector {
 	constexpr void clear() { cur_size = 0; }
 	constexpr bool empty() const { return cur_size == 0; }
 	constexpr int size() const { return cur_size; }
+	constexpr int resize(int s) { return cur_size = std::clamp(s, 0, N); }
 	constexpr void sanitize() { if (cur_size > N || cur_size < 0) cur_size = 0; }
 	constexpr int rev_start_idx() const { return cur_size - 1; }
 };
 
 template<typename T, int N>
 struct static_ring_buffer {
+	using value_type = T;
 	std::array<T, N> storage{};
 	int cur_start{};
 	int cur_write{};

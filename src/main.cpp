@@ -102,13 +102,34 @@ static std::array<InverterGroup, 3> test_groups{
     },
     InverterGroup {
         .inverter = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
-        .pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1100},
-        .battery = {.device_id = get_next_device_id(), .imp_w = 100, .exp_w = 0}
+        .pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 2000},
+        .battery = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000}
     },
 };
 
 static PowerInfo meter_power {.device_id = METER_ID, .imp_w = 1000, .exp_w = 0};
-static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 4800, .exp_w = 0};
+static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 5700, .exp_w = 0};
+
+static std::array<CurveInfo, 2> test_curves { 
+    CurveInfo {
+        .name = "Erzeugung",
+        .unit_name = "W",
+        .time_start = "gestern",
+        .time_end = "heute",
+        .color = RGB{200, 200, 0}.to_rgb565(),
+        .max_val = 10'000,
+        .data = {}
+    },
+    CurveInfo {
+        .name = "Verbrauch",
+        .unit_name = "W",
+        .time_start = "gestern",
+        .time_end = "heute",
+        .color = RGB{50, 50, 200}.to_rgb565(),
+        .max_val = 10'000,
+        .data = {}
+    },
+};
 
 std::array<std::string_view, 4> texts{"Hello darkness", "my old friend,", "shall peace and glory", "thy remove"};
 void display_task(void *) {
@@ -117,8 +138,17 @@ void display_task(void *) {
     // init all globals
     screen().init();
     draw_ctx().draw.set_font("bitmap8");
-    // draw_ctx().draw_vec.set_antialiasing(PP_AA_X16);
-    // draw_ctx().draw_vec.set_font("Roboto", 15);
+
+    test_curves[0].data.resize(512);
+    test_curves[1].data.resize(512);
+    for (int16_t &i: test_curves[0].data){
+        int idx = &i - test_curves[0].data.begin();
+        i = std::max(-std::cos(idx / 512. * 2 * std::numbers::pi), 0.) * 10'000;
+    }
+    for (int16_t &i: test_curves[1].data){
+        int idx = &i - test_curves[1].data.begin();
+        i = std::pow(std::sin(idx / 512. * 2 * std::numbers::pi), 2.) * 10'000;
+    }
 
     LogInfo("Psram size: {}", ps_size);
     uint32_t last_ms = time_ms();
@@ -149,7 +179,7 @@ void display_task(void *) {
         draw_ctx().draw.set_pen(0);
         draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
         overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_groups, home_power, meter_power);
-        history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, {});
+        history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_curves);
         settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default());
         screen().set_framebuffer(draw_ctx().frame_buffer());
         draw_ctx().swap();
