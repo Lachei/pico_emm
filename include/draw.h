@@ -88,7 +88,6 @@ struct OverviewPage {
 	float ig_view_height{};
 	bool drag_ig_view{};
 	float y_offset{};
-	float inverter_scroll{};
 	uint32_t d_last_spawn_ms{};
 	EnergyInfo home_energy_info{.device_id = HOME_ID};
 	EnergyInfo meter_energy_info{.device_id = METER_ID};
@@ -140,6 +139,7 @@ struct IpButton {
 	static_string<4> str{};
 };
 struct settings;
+struct runtime_state;
 struct SettingsPage {
 	float base_offset{480};
 	
@@ -161,10 +161,37 @@ struct SettingsPage {
 	Button i8{{150, 210, 15, 15}, "8"};
 	Button i9{{170, 210, 15, 15}, "9"};
 	Button i0{{190, 210, 15, 15}, "0"};
-	Button ix{{210, 210, 15, 15}, "x"};
+	Button ix{{210, 210, 15, 15}, "<-"};
 	std::array<Button*, 11> number_inputs{&i1, &i2, &i3, &i4, &i5, &i6, &i7, &i8, &i9, &i0, &ix};
+	static_vector<Button, 32> delete_buttons{};
 
-	void draw(Draw &display, TimeInfo time_info, float x_offset, settings& settings);
+	void draw(Draw &display, TimeInfo time_info, float x_offset, settings &settings, runtime_state &runtime_state);
+	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
+};
+
+struct wifi_storage;
+struct PwdButton {
+	static_string<64> pwd{};
+	Button button;
+};
+constexpr std::string_view KEYBOARD_CHARS{"!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ"};
+struct WifiPage {
+	float base_offset{720};
+	Button shift{{10, 220, 35, 15}, "^Shift"};
+	Button del{{55, 220, 15, 15}, "<-"};
+	Button show_pwd{{80, 220, 45, 15}, "Pw zeigen"};
+	Button connect{{135, 220, 45, 15}, "Verbinden"};
+
+	static_vector<PwdButton, 8> wifi_pwds{};
+	PwdButton *selected_pwd{};
+	bool drag_wifi_view{};
+	float y_offset{};
+	float target_y_offset{};
+
+	std::array<Button, KEYBOARD_CHARS.size()> keyboard_buttons{};
+
+	void init(bool shift);
+	void draw(Draw &display, TimeInfo time_info, float x_offset, wifi_storage &w);
 	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
 };
 
@@ -182,6 +209,11 @@ inline HistoryPage& history_page() {
 
 inline SettingsPage& settings_page() {
 	static SettingsPage page{};
+	return page;
+}
+
+inline WifiPage& wifi_page() {
+	static WifiPage page{};
 	return page;
 }
 

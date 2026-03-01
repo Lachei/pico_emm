@@ -10,11 +10,6 @@ constexpr inline std::ranges::iota_view<int, int> range(int s, int e = INV) {
 	return std::ranges::iota_view<int, int>{s, e};
 }
 
-template<typename T, class P = std::identity>
-struct contains { T e; P p = {}; };
-template<std::ranges::input_range R, typename T, typename P>
-constexpr bool operator|(R&& r, const contains<T, P>& c) { return std::ranges::contains(std::forward<R>(r), c.e, c.p); };
-
 template<typename T>
 struct find {T f;};
 template<typename S, typename T>

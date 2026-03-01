@@ -1,7 +1,10 @@
+#include "FreeRTOS.h"
 #include "draw.h"
 #include "log_storage.h"
 #include "ranges_util.h"
 #include "ntp_client.h"
+#include "settings.h"
+#include "wifi_storage.h"
 
 #define RECTE(x, y, width, height, e) Line{{x,y}, {x + width, y}}, \
 				  Line{{x + width,y}, {x + width, y + height + e}}, \
@@ -250,6 +253,7 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	};
 	{
 		float y_base_f = Y_BUS + inverter_groups.size() * IG_HEIGHT / 2.;
+		int bubble_off = 1;
 		for (InverterGroup &ig: inverter_groups) {
 			EnergyInfo *e_inverter = integrate_power(ig.inverter, true);
 			EnergyInfo *e_pv = integrate_power(ig.pv);
@@ -283,22 +287,23 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 						float cur_e = std::min(rest, cur->imp_ws);
 						rest -= cur_e;
 						cur->imp_ws -= cur_e;
-						energy_blobs.push({.energy = cur_e, .x = x + 1, .y = y, .end_device_id = cur->device_id, .col = COL_INVERTER, .dir = Direction::RIGHT});
+						energy_blobs.push({.energy = cur_e, .x = x + bubble_off, .y = y, .end_device_id = cur->device_id, .col = COL_INVERTER, .dir = Direction::RIGHT});
 					}
 					float cur_e = std::min(rest, home_energy_info.imp_ws);
 					if (cur_e > 5) {
 						rest -= cur_e;
 						home_energy_info.imp_ws -= cur_e;
-						energy_blobs.push({.energy = cur_e, .x = x + 1, .y = y, .end_device_id = HOME_ID, .col = COL_INVERTER, .dir = Direction::RIGHT});
+						energy_blobs.push({.energy = cur_e, .x = x + bubble_off, .y = y, .end_device_id = HOME_ID, .col = COL_INVERTER, .dir = Direction::RIGHT});
 					}
 					cur_e = std::min(rest, meter_energy_info.imp_ws);
 					if (cur_e > 5) {
 						rest -= cur_e;
 						meter_energy_info.imp_ws -= cur_e;
-						energy_blobs.push({.energy = cur_e, .x = x + 1, .y = y, .end_device_id = METER_ID, .col = COL_INVERTER, .dir = Direction::RIGHT});
+						energy_blobs.push({.energy = cur_e, .x = x + bubble_off, .y = y, .end_device_id = METER_ID, .col = COL_INVERTER, .dir = Direction::RIGHT});
 					}
 					if (rest > 100)
 						LogWarning("Still got some juice: {}", rest);
+					bubble_off += 2;
 				}
 			}
 			y_base_f -= IG_HEIGHT;
@@ -666,19 +671,66 @@ bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
-void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings& settings) {
+void table_background(Draw &draw, int x_offset, int cur_y, int row, int x_start = 15) {
+	draw.set_pen(RGB{200, 200, 255}.to_rgb565());
+	if (row & 1)
+		draw.rectangle({x_start + x_offset, cur_y - 1, 240 - x_start - 10, 15});
+	draw.set_pen(0);
+};
+void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s, runtime_state &r) {
 	int x_offset = int(x_off + base_offset);
 	if (x_offset >= 239 ||
 	    x_offset + 239 <= 0)
 		return;
 
-	draw.set_pen(0);
-	draw.text("Verbundene Geräte:", {10 + x_offset, 30}, 100, 1);
-	// TODO: readout and draw connected devices
-	
-	draw.text("Konfigurierte Geräte:", {10 + x_offset, 60}, 100, 1);
-	// TODO: readout and draw configured devices that are not connected
+	// local utility functions
+	const auto remove_ip = [&request_settings_store](uint32_t ip, settings &s, runtime_state &r) {
+		uint32_t *s_ip = s.configured_ips | find{ip};
+		if (!s_ip)
+			return;
+		request_settings_store = true;
+		*s_ip = *s.configured_ips.pop();
+		IpName *r_ip = r.found_ips | find{[ip](IpName ipn){return ip == ipn.ip;}};
+		if (!r_ip)
+			return;
+		*r_ip = *r.found_ips.pop();
+	};
 
+	delete_buttons.resize(s.configured_ips.size());
+	draw.set_pen(0);
+	int cur_y = 30;
+	draw.text("Verbundene Geräte:", {10 + x_offset, cur_y}, 100, 1);
+	cur_y += 15;
+	int row{};
+	for (const auto &[ip, name]: r.found_ips) {
+		table_background(draw, x_offset, cur_y, ++row);
+		std::string_view line = static_format<64>("{}.{}.{}.{}: {}", ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff, name.sv());
+		draw.text(line, {20 + x_offset, cur_y + 2}, 200, 1);
+		Button &del= delete_buttons[row - 1];
+		del.pos = {200, cur_y, 13, 13};
+		del.text = "X";
+		if (del(draw, x_offset))
+			remove_ip(ip, s, r);
+		cur_y += 15;
+	}
+	cur_y += 5;
+	draw.text("Konfigurierte Geräte (nicht verbunden):", {10 + x_offset, cur_y}, 200, 1);
+	cur_y += 15;
+	int db_off = row;
+	row = 0;
+	for (uint32_t ip: s.configured_ips) {
+		if (r.found_ips | find{[ip](const IpName &ipn){return ipn.ip == ip;}})
+			continue;
+		table_background(draw, x_offset, cur_y, ++row);
+		std::string_view line = static_format<64>("{}.{}.{}.{}", ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff);
+		draw.text(line, {20 + x_offset, cur_y + 2}, 200, 1);
+		Button &del= delete_buttons[db_off + row - 1];
+		del.pos = {200, cur_y, 13, 13};
+		del.text = "X";
+		if (del(draw, x_offset))
+			remove_ip(ip, s, r);
+		cur_y += 15;
+	}
 	draw.text("Neues Gerät konfigurieren:", {10 + x_offset, 160}, 140, 1);
 	
 	for (IpButton *ip_button: ip_buttons) {
@@ -691,7 +743,18 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings& s
 		selected_ip = ip_button;
 	}
 	if (configure_button(draw, x_offset)) {
-		// TODO: add to stored configurations
+		uint32_t ip{};
+		ip |= std::clamp(to_int(ip1.button.text).value_or(0), 0, 255) << 24;
+		ip |= std::clamp(to_int(ip2.button.text).value_or(0), 0, 255) << 16;
+		ip |= std::clamp(to_int(ip3.button.text).value_or(0), 0, 255) << 8;
+		ip |= std::clamp(to_int(ip4.button.text).value_or(0), 0, 255);
+		bool ip_exists = s.configured_ips | find{[ip](uint32_t cip){return cip == ip;}};
+		if (!ip_exists && s.configured_ips.push(ip))
+			request_settings_store = true;
+		else if (ip_exists)
+			LogError("Ip {}.{}.{}.{} already exists", ip1.button.text, ip2.button.text, ip3.button.text, ip4.button.text);
+		else
+			LogError("Failed to add new ip");
 	}
 	const auto le = [] (char c, int i) { if (c == '0') return true; return (c - '1') <= i - 1; };
 	for (Button *button: number_inputs) {
@@ -718,11 +781,138 @@ bool SettingsPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	for (IpButton *b: ip_buttons)
 		if (b->button.handle_touch_input(touch_info, base_offset + x_offset))
 			return true;
+	for (Button &b: delete_buttons)
+		if (b.handle_touch_input(touch_info, base_offset + x_offset))
+			return true;
 	if (configure_button.handle_touch_input(touch_info, base_offset + x_offset))
 		return true;
 	for (Button *b: number_inputs)
 		if (b->handle_touch_input(touch_info, base_offset + x_offset))
 			return true;
+	return false;
+}
+
+constexpr std::string_view LOWER_CHARS{"abcdefghijklmnopqrstuvwxyz"};
+void WifiPage::init(bool shift) {
+	int cur_x{10};
+	int cur_y{130};
+	for (int i: range(keyboard_buttons.size())) {
+		keyboard_buttons[i].pos = {cur_x, cur_y, 15, 15};
+		std::string_view c = KEYBOARD_CHARS.substr(i, 1);
+		if (!shift && c[0] >= 'A' && c[0] <= 'Z')
+			c = LOWER_CHARS.substr(c[0] - 'A', 1);
+		keyboard_buttons[i].text = c;
+		cur_x += 17;
+		if (cur_x > 220) {
+			cur_y += 17;
+			cur_x = 10;
+		}
+	}
+}
+
+const static Rect WIFI_RECT{5, 30, 230, 90};
+constexpr std::string_view STARS{"***********************************************"};
+void WifiPage::draw(Draw &draw, TimeInfo time_info, float x_off, wifi_storage &w) {
+	y_offset = .8 * y_offset + .2 * target_y_offset;
+	int x_offset = int(x_off + base_offset);
+	if (x_offset >= 239 ||
+	    x_offset + 239 <= 0)
+		return;
+
+	// drawing the found wifis
+	draw.set_pen(RGB{200, 200, 200}.to_rgb565());
+	Point offset{x_offset, 0};
+	for (const Line& l: {RECTE(WIFI_RECT.x, WIFI_RECT.y, WIFI_RECT.w, WIFI_RECT.h, 1)})
+		draw.line(l.start + offset, l.end + offset);
+	draw.set_clip(WIFI_RECT + Point{x_offset, 0});
+	wifi_pwds.resize(w.wifis.size());
+	int cur_y{30 + int(y_offset)};
+	for (int i: range(w.wifis.size())) {
+		table_background(draw, x_offset, cur_y, i + 1, 5);
+		std::string_view cur_ssid = w.wifis[i].ssid.sv();
+		draw.set_pen(0);
+		draw.text(cur_ssid, {10 + x_offset, cur_y + 2}, 100, 1);
+		if (w.ssid_wifi.sv() == cur_ssid && !w.wifi_connected) {
+			draw.set_pen(RGB{150, 150, 0}.to_rgb565());
+			draw.text("Verbinden...", {180 + x_offset, cur_y + 2}, 100, 1);
+		} else if (w.ssid_wifi.sv() == cur_ssid && w.wifi_connected) {
+			draw.set_pen(RGB{0, 150, 0}.to_rgb565());
+			draw.text("Verbunden", {180 + x_offset, cur_y + 2}, 100, 1);
+		}
+		cur_y += 15;
+		table_background(draw, x_offset, cur_y, i + 1, 5);
+		draw.set_pen(0);
+		draw.text("Passwort:", {30 + x_offset, cur_y}, 50, 1);
+		wifi_pwds[i].button.pos = {80, cur_y - 2, 140, 15};
+		if (show_pwd.is_selected())
+			wifi_pwds[i].button.text = wifi_pwds[i].pwd.sv();
+		else
+			wifi_pwds[i].button.text = STARS.substr(0, wifi_pwds[i].pwd.size());
+		if (wifi_pwds[i].button(draw, x_offset)) {
+			for (PwdButton &b: wifi_pwds)
+				b.button.style = ButtonStyle::DEFAULT;
+			selected_pwd = &wifi_pwds[i];
+			selected_pwd->button.style = ButtonStyle::BORDER;
+		}
+		cur_y += 20;
+	}
+	draw.remove_clip();
+
+	if (shift(draw, x_offset)) {
+		shift.style = shift.is_selected() ? ButtonStyle::DEFAULT: ButtonStyle::BORDER;
+		init(shift.is_selected());
+	}
+
+	if (del(draw, x_offset) && selected_pwd)
+		selected_pwd->pwd.pop();
+
+	if (show_pwd(draw, x_offset))
+		show_pwd.style = show_pwd.is_selected() ? ButtonStyle::DEFAULT: ButtonStyle::BORDER;
+	
+	if (connect(draw, x_offset) && selected_pwd) {
+		int wifi_idx = selected_pwd - wifi_pwds.begin();
+		w.ssid_wifi.fill(w.wifis[wifi_idx].ssid.sv());
+		w.ssid_wifi.make_c_str_safe();
+		w.pwd_wifi.fill(selected_pwd->pwd.sv());
+		w.pwd_wifi.make_c_str_safe();
+		w.wifi_connected = false;
+		w.wifi_changed = true;
+		request_store_wifi = true;
+	}
+
+	for (Button &b: keyboard_buttons) {
+		if (!b(draw, x_offset) || !selected_pwd)
+			continue;
+		selected_pwd->pwd.append(b.text);
+		selected_pwd->button.text = selected_pwd->pwd.sv();
+	}
+}
+
+bool WifiPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
+	x_offset += base_offset;
+	if (touch_info.touch_ended()) {
+		target_y_offset = std::clamp(target_y_offset, std::min(-wifi_storage::Default().wifis.size() * 35.f + WIFI_RECT.h, .0f), .0f);
+		drag_wifi_view = false;
+	}
+	if (shift.handle_touch_input(touch_info, x_offset) ||
+		del.handle_touch_input(touch_info, x_offset) ||
+		show_pwd.handle_touch_input(touch_info, x_offset) ||
+		connect.handle_touch_input(touch_info, x_offset))
+		return true;
+	for (PwdButton &b: wifi_pwds)
+		if (b.button.handle_touch_input(touch_info, x_offset))
+			return true;
+	for (Button &b: keyboard_buttons)
+		if (b.handle_touch_input(touch_info, x_offset))
+			return true;
+	if (touch_info.touch_started() && (WIFI_RECT + Point{x_offset, 0}).contains(*touch_info.cur_touch)) {
+		drag_wifi_view = true;
+		return true;
+	}
+	if (drag_wifi_view && touch_info.cur_touch && touch_info.last_touch) {
+		target_y_offset += touch_info.cur_touch->y - touch_info.last_touch->y;
+		return true;
+	}
 	return false;
 }
 

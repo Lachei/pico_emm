@@ -9,6 +9,7 @@
 
 #include "log_storage.h"
 #include "mutex.h"
+#include "settings.h"
 
 constexpr uint32_t FLASH_SIZE{PICO_FLASH_SIZE_BYTES};
 
@@ -17,6 +18,7 @@ constexpr uint32_t FLASH_SIZE{PICO_FLASH_SIZE_BYTES};
  * as the elements at the back of the layout always stay in the same position
  */
 struct persistent_storage_layout {
+	settings persistent_settings;
 	static_string<64> user_pwd;
 	static_string<64> hostname;
 	static_string<64> ssid_wifi;

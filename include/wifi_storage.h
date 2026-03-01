@@ -2,10 +2,17 @@
 
 #include <iostream>
 
+#include "pico/cyw43_arch.h"
+#include "lwip/apps/mdns.h"
+
 #include "log_storage.h"
 #include "static_types.h"
 #include "persistent_storage.h"
 #include "ranges_util.h"
+
+constexpr int MAX_DISCOVERED_WIFIS{8};
+
+inline bool request_store_wifi{false};
 
 struct wifi_storage {
 	static constexpr uint32_t DISCOVER_TIMEOUT_US = 6e6; // 6 seconds
@@ -15,7 +22,7 @@ struct wifi_storage {
 		int rssi{};
 		uint64_t last_seen_us{};
 	};
-	static_vector<wifi_info, 8> wifis{};
+	static_vector<wifi_info, MAX_DISCOVERED_WIFIS> wifis{};
 	static wifi_storage& Default() {
 		static wifi_storage storage{};
 		[[maybe_unused]] static bool inited = [](){ storage.load_from_persistent_storage(); return true; }();
@@ -61,7 +68,7 @@ struct wifi_storage {
 
 	void update_wifi_connection() {
 		wifi_connected = CYW43_LINK_UP == cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
-		bool wifi_available = wifis | contains{ssid_wifi.sv(), [](const wifi_info &w) { return w.ssid.sv(); }};
+		bool wifi_available = wifis | find{[ssid = ssid_wifi.sv()](const wifi_info &w) { return ssid == w.ssid.sv(); }};
 		if (!wifi_changed || ssid_wifi.cur_size == 0 || pwd_wifi.cur_size < 8 || !wifi_available)
 			return;
 
@@ -156,7 +163,7 @@ struct wifi_storage {
 	}
 };
 
-std::ostream& operator<<(std::ostream &os, const wifi_storage &w) {
+inline std::ostream& operator<<(std::ostream &os, const wifi_storage &w) {
 	os << "Wifi connected: " << (w.wifi_connected ? "true": "false") << '\n';
 	os << "Stored wifi ssid: " << w.ssid_wifi.sv() << '\n';
 	os << "hostname: " << w.hostname.sv() << '\n';

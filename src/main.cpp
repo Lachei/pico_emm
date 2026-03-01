@@ -101,14 +101,14 @@ static std::array<InverterGroup, 3> test_groups{
         .battery = {.device_id = get_next_device_id(), .imp_w = 600, .exp_w = 0}
     },
     InverterGroup {
-        .inverter = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
-        .pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 2000},
-        .battery = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000}
+        .inverter = {.device_id = get_next_device_id(), .imp_w = 1000, .exp_w = 0},
+        .pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
+        .battery = {.device_id = get_next_device_id(), .imp_w = 2000, .exp_w = 0}
     },
 };
 
 static PowerInfo meter_power {.device_id = METER_ID, .imp_w = 1000, .exp_w = 0};
-static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 5700, .exp_w = 0};
+static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 2700, .exp_w = 0};
 
 static std::array<CurveInfo, 2> test_curves { 
     CurveInfo {
@@ -138,6 +138,7 @@ void display_task(void *) {
     // init all globals
     screen().init();
     draw_ctx().draw.set_font("bitmap8");
+    wifi_page().init(false);
 
     test_curves[0].data.resize(512);
     test_curves[1].data.resize(512);
@@ -156,6 +157,20 @@ void display_task(void *) {
     float cur_page_offset = page_offset;
     float fps{};
     for (;;) {
+        // single place where storaeg is loaded and written
+        if (request_settings_store) {
+            screen().wait_for_vsync();
+            persistent_storage_t::Default().write(settings::Default(), &persistent_storage_layout::persistent_settings);
+        }
+        if (request_settings_load)
+            persistent_storage_t::Default().read(&persistent_storage_layout::persistent_settings, settings::Default());
+        if (request_store_wifi) {
+            screen().wait_for_vsync();
+            persistent_storage_t::Default().write(wifi_storage::Default().ssid_wifi, &persistent_storage_layout::ssid_wifi);
+            persistent_storage_t::Default().write(wifi_storage::Default().pwd_wifi, &persistent_storage_layout::pwd_wifi);
+        }
+        request_settings_store = request_settings_load = request_store_wifi = false;
+
         uint32_t ms = time_ms();
         uint32_t delta_ms = ms - last_ms;
         last_ms = ms;
@@ -180,7 +195,8 @@ void display_task(void *) {
         draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
         overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_groups, home_power, meter_power);
         history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_curves);
-        settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default());
+        settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default(), runtime_state::Default());
+        wifi_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, wifi_storage::Default());
         screen().set_framebuffer(draw_ctx().frame_buffer());
         draw_ctx().swap();
         screen().wait_for_vsync();
@@ -193,7 +209,8 @@ void display_task(void *) {
 bool handle_touch_pages(TouchInfo &touch_info, int x_offset) {
     return overview_page().handle_touch_input(touch_info, x_offset) ||
            history_page().handle_touch_input(touch_info, x_offset) ||
-           settings_page().handle_touch_input(touch_info, x_offset);
+           settings_page().handle_touch_input(touch_info, x_offset) ||
+           wifi_page().handle_touch_input(touch_info, x_offset);
 }
 void touchscreen_task(void *) {
     LogInfo("Touchscreen task started");
@@ -211,7 +228,7 @@ void touchscreen_task(void *) {
             if (touch_info.last_touch)
                 handle_touch_pages(touch_info, page_offset);
             // snap to closest page
-            page_offset = std::clamp(std::round(page_offset / 240), -2.f, .0f) * 240.f;
+            page_offset = std::clamp(std::round(page_offset / 240), -3.f, .0f) * 240.f;
             continue;
         }
         TS_Point t = touchscreen().getPoint(0);
@@ -280,6 +297,8 @@ void startup_task(void *) {
         }
     }
     cyw43_arch_enable_sta_mode();
+    persistent_storage_t::Default().read(&persistent_storage_layout::persistent_settings, settings::Default());
+    settings::Default().sanitize();
     wifi_storage::Default().update_hostname();
     Webserver().start();
     LogInfo("Ready, running http at {}", ip4addr_ntoa(netif_ip4_addr(netif_list)));
