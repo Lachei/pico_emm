@@ -79,6 +79,8 @@ add_executable(pico-emm
         src/draw.cpp
         src/FT6236.cpp
         src/psram.cpp
+        src/inverter.cpp
+        src/meter.cpp
 )
 set_property(TARGET pico-emm PROPERTY CXX_STANDARD 23)
 set_property(TARGET pico-emm APPEND_STRING PROPERTY LINK_FLAGS "-Wl,--print-memory-usage")

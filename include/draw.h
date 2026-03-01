@@ -3,7 +3,7 @@
 #include <span>
 
 #include "libraries/pico_vector/pico_vector.hpp"
-#include "static_types.h"
+#include "emm_structs.h"
 
 using Point = pimoroni::Point;
 using Rect = pimoroni::Rect;
@@ -67,19 +67,11 @@ struct TimeInfo {
 	uint32_t ms;
 	uint32_t delta_ms;
 };
-struct PowerInfo {
-	int device_id;
-	float imp_w;
-	float exp_w;
-};
 struct EnergyInfo {
 	int device_id;
 	bool is_inverter;
 	float imp_ws;
 	float exp_ws;
-};
-struct InverterGroup {
-	PowerInfo inverter, pv, battery;
 };
 enum struct SelectedHistory {DAY = 0, MONTH, YEAR, COUNT};
 struct OverviewPage {
@@ -143,11 +135,13 @@ struct runtime_state;
 struct SettingsPage {
 	float base_offset{480};
 	
-	IpButton ip1{.button = {{10, 180, 30, 15}, "...", ButtonStyle::BORDER}};
-	IpButton ip2{.button = {{50, 180, 30, 15}, "..."}};
-	IpButton ip3{.button = {{90, 180, 30, 15}, "..."}};
-	IpButton ip4{.button = {{130, 180, 30, 15}, "..."}};
-	std::array<IpButton*, 4> ip_buttons{&ip1, &ip2, &ip3, &ip4};
+	IpButton ip1{.button = {{10, 180, 20, 15}, "...", ButtonStyle::BORDER}};
+	IpButton ip2{.button = {{40, 180, 20, 15}, "..."}};
+	IpButton ip3{.button = {{70, 180, 20, 15}, "..."}};
+	IpButton ip4{.button = {{100, 180, 20, 15}, "..."}};
+	IpButton port{.button = {{130, 180, 20, 15}, "...."}};
+	IpButton addr{.button = {{160, 180, 20, 15}, "..."}};
+	std::array<IpButton*, 6> ip_buttons{&ip1, &ip2, &ip3, &ip4, &port, &addr};
 	IpButton *selected_ip{&ip1};
 	Button configure_button{{170, 180, 60, 15}, "Hinzufügen"};
 

@@ -684,33 +684,33 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 		return;
 
 	// local utility functions
-	const auto remove_ip = [&request_settings_store](uint32_t ip, settings &s, runtime_state &r) {
-		uint32_t *s_ip = s.configured_ips | find{ip};
-		if (!s_ip)
+	const auto remove_addr = [&request_settings_store](ModbusTcpAddr a, settings &s, runtime_state &r) {
+		ModbusTcpAddr *s_addr = s.configured_inverters | find{a};
+		if (!s_addr)
 			return;
 		request_settings_store = true;
-		*s_ip = *s.configured_ips.pop();
-		IpName *r_ip = r.found_ips | find{[ip](IpName ipn){return ip == ipn.ip;}};
+		*s_addr = *s.configured_inverters.pop();
+		AddrName *r_ip = r.found_ips | find{[&a](AddrName ipn){return a == ipn.addr;}};
 		if (!r_ip)
 			return;
 		*r_ip = *r.found_ips.pop();
 	};
 
-	delete_buttons.resize(s.configured_ips.size());
+	delete_buttons.resize(s.configured_inverters.size());
 	draw.set_pen(0);
 	int cur_y = 30;
 	draw.text("Verbundene Geräte:", {10 + x_offset, cur_y}, 100, 1);
 	cur_y += 15;
 	int row{};
-	for (const auto &[ip, name]: r.found_ips) {
+	for (const auto &[a, name]: r.found_ips) {
 		table_background(draw, x_offset, cur_y, ++row);
-		std::string_view line = static_format<64>("{}.{}.{}.{}: {}", ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff, name.sv());
+		std::string_view line = static_format<64>("{}.{}.{}.{}:{}|{} {}", a.ip >> 24, (a.ip >> 16) & 0xff, (a.ip >> 8) & 0xff, a.ip & 0xff, a.port, (int)a.modbus_id, name.sv());
 		draw.text(line, {20 + x_offset, cur_y + 2}, 200, 1);
 		Button &del= delete_buttons[row - 1];
 		del.pos = {200, cur_y, 13, 13};
 		del.text = "X";
 		if (del(draw, x_offset))
-			remove_ip(ip, s, r);
+			remove_addr(a, s, r);
 		cur_y += 15;
 	}
 	cur_y += 5;
@@ -718,21 +718,26 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 	cur_y += 15;
 	int db_off = row;
 	row = 0;
-	for (uint32_t ip: s.configured_ips) {
-		if (r.found_ips | find{[ip](const IpName &ipn){return ipn.ip == ip;}})
+	for (ModbusTcpAddr a: s.configured_inverters) {
+		if (r.found_ips | find{[a](const AddrName &an){return an.addr == a;}})
 			continue;
 		table_background(draw, x_offset, cur_y, ++row);
-		std::string_view line = static_format<64>("{}.{}.{}.{}", ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff);
+		std::string_view line = static_format<64>("{}.{}.{}.{}:{}|{}", a.ip >> 24, (a.ip >> 16) & 0xff, (a.ip >> 8) & 0xff, a.ip & 0xff, a.port, (int)a.modbus_id);
 		draw.text(line, {20 + x_offset, cur_y + 2}, 200, 1);
 		Button &del= delete_buttons[db_off + row - 1];
 		del.pos = {200, cur_y, 13, 13};
 		del.text = "X";
 		if (del(draw, x_offset))
-			remove_ip(ip, s, r);
+			remove_addr(a, s, r);
 		cur_y += 15;
 	}
 	draw.text("Neues Gerät konfigurieren:", {10 + x_offset, 160}, 140, 1);
 	
+	draw.text(".", {35 + x_offset, 180}, 5, 1);
+	draw.text(".", {65 + x_offset, 180}, 5, 1);
+	draw.text(".", {95 + x_offset, 180}, 5, 1);
+	draw.text(":", {125 + x_offset, 180}, 5, 1);
+	draw.text("|", {155 + x_offset, 180}, 5, 1);
 	for (IpButton *ip_button: ip_buttons) {
 		if (!ip_button->button(draw, x_offset)) 
 			continue;
@@ -743,16 +748,18 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 		selected_ip = ip_button;
 	}
 	if (configure_button(draw, x_offset)) {
-		uint32_t ip{};
-		ip |= std::clamp(to_int(ip1.button.text).value_or(0), 0, 255) << 24;
-		ip |= std::clamp(to_int(ip2.button.text).value_or(0), 0, 255) << 16;
-		ip |= std::clamp(to_int(ip3.button.text).value_or(0), 0, 255) << 8;
-		ip |= std::clamp(to_int(ip4.button.text).value_or(0), 0, 255);
-		bool ip_exists = s.configured_ips | find{[ip](uint32_t cip){return cip == ip;}};
-		if (!ip_exists && s.configured_ips.push(ip))
+		ModbusTcpAddr a{};
+		a.ip |= std::clamp(to_int(ip1.button.text).value_or(0), 0, 255) << 24;
+		a.ip |= std::clamp(to_int(ip2.button.text).value_or(0), 0, 255) << 16;
+		a.ip |= std::clamp(to_int(ip3.button.text).value_or(0), 0, 255) << 8;
+		a.ip |= std::clamp(to_int(ip4.button.text).value_or(0), 0, 255);
+		a.port = to_int(port.button.text).value_or(0);
+		a.modbus_id = std::clamp(to_int(addr.button.text).value_or(0), 0, 255);
+		bool ip_exists = s.configured_inverters | find{a};
+		if (!ip_exists && s.configured_inverters.push(a))
 			request_settings_store = true;
 		else if (ip_exists)
-			LogError("Ip {}.{}.{}.{} already exists", ip1.button.text, ip2.button.text, ip3.button.text, ip4.button.text);
+			LogWarning("Addr {}.{}.{}.{}:{}|{} already exists", ip1.button.text, ip2.button.text, ip3.button.text, ip4.button.text, port.button.text, addr.button.text);
 		else
 			LogError("Failed to add new ip");
 	}
@@ -763,6 +770,13 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 		if (button == &ix) {
 			selected_ip->str.pop();
 			selected_ip->button.text = selected_ip->str.sv();
+		} else if (selected_ip == &port) {
+			uint32_t p = to_int(port.button.text).value_or(0);
+			bool can_append = 10 * p + to_int(button->text).value_or(0) <= 0xffff;
+			if (can_append) {
+				selected_ip->str.append(button->text);
+				selected_ip->button.text = selected_ip->str.sv();
+			}
 		} else {
 			// safety checks for valid ipv4 part
 			int s = selected_ip->str.size();
