@@ -51,7 +51,7 @@ git clone https://github.com/Lachei/pico_iot.git
 cd pico_iot
 mkdir build
 cd build
-cmake .. -DPICO_SDK_PATH=<PAHT_TO_PICO_SDK_FOLDER> -DFREERTOS_KERNEL_PATH=<PATH_TO_DOWNLOADED_RTOS_KERNEL_FOLDER> --fresh -DPICO_BOARD=pico2_w
+cmake .. -DPICO_SDK_PATH=<path> -DFREERTOS_KERNEL_PATH=<path> -DLIBMODBUS_STATIC_PATH=<path> -DLIBPIMORONI_PICO_PATH=<path> -DPRESTO_PATH=<path> --fresh -DPICO_BOARD=pimoroni_pico_plus2_w_rp2350
 make -j12
 ```
 

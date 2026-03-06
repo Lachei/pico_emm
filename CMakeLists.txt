@@ -36,15 +36,16 @@ include(pico_sdk_import.cmake)
 include(pico_extras_import_optional.cmake)
 include(FreeRTOS_Kernel_import.cmake)
 include(cmake/html_pages_library.cmake)
-add_subdirectory(${LIBMODBUS_STATIC_PATH} libmodbus-static)
-add_subdirectory(${LIBPIMORONI_PICO_PATH} libpimoroni-pico)
-add_subdirectory(${PRESTO_PATH}/drivers/st7701 presto-driver)
+pico_sdk_init()
 
 add_compile_options(-Wall)
+project(pico-emm C CXX ASM)
 
-project(pico-emm C CXX)
-
-pico_sdk_init()
+add_subdirectory(${LIBMODBUS_STATIC_PATH} libmodbus-static)
+include_directories(${LIBPIMORONI_PICO_PATH})
+add_subdirectory(${LIBPIMORONI_PICO_PATH}/libraries libpimoroni-pico-libraries)
+add_subdirectory(${LIBPIMORONI_PICO_PATH}/common libpimoroni-pico-common)
+add_subdirectory(${PRESTO_PATH}/drivers/st7701 presto-driver)
 
 set(CMAKE_BUILD_TYPE "MinSizeRel")
 
@@ -87,6 +88,7 @@ set_property(TARGET pico-emm APPEND_STRING PROPERTY LINK_FLAGS "-Wl,--print-memo
 target_compile_definitions(pico-emm PUBLIC CPU_CLOCK_MHZ=333 CYW43_PIO_CLOCK_DIV_INT=3 RP2350_PSRAM_MAX_SCK_HZ=170000000)
 target_include_directories(pico-emm PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/modbus_layouts
         ${LIBPIMORONI_PICO_PATH}
         ${PRESTO_PATH}
 )
@@ -102,6 +104,7 @@ target_link_libraries(pico-emm
         st7701_presto
         pico_graphics
         pico_vector
+        libmodbus-static
 )
 pico_add_extra_outputs(pico-emm)
 pico_enable_stdio_usb(pico-emm 1)

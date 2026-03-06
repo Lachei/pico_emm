@@ -9,6 +9,18 @@ constexpr inline std::ranges::iota_view<int, int> range(int s, int e = INV) {
 		return std::ranges::iota_view<int, int>{0, s};
 	return std::ranges::iota_view<int, int>{s, e};
 }
+// usage: for (int i: range_inv(5)) -> 5, 4, 3, 2, 1, 0
+struct range_inv {
+	int start, fin = 0;
+	struct iterator{
+		int cur;
+		int operator*() const { return cur; }
+		iterator& operator++() { --cur; return *this; }
+		bool operator==(const iterator &o) const { return cur == o.cur; }
+	};
+	iterator begin() const { return iterator{start}; }
+	iterator end() const { return iterator{fin - 1}; }
+};
 
 template<typename T>
 struct find {T f;};

@@ -731,13 +731,14 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 			remove_addr(a, s, r);
 		cur_y += 15;
 	}
+	draw.set_pen(0);
 	draw.text("Neues Gerät konfigurieren:", {10 + x_offset, 160}, 140, 1);
 	
-	draw.text(".", {35 + x_offset, 180}, 5, 1);
-	draw.text(".", {65 + x_offset, 180}, 5, 1);
-	draw.text(".", {95 + x_offset, 180}, 5, 1);
-	draw.text(":", {125 + x_offset, 180}, 5, 1);
-	draw.text("|", {155 + x_offset, 180}, 5, 1);
+	draw.text(".", {32 + x_offset, 184}, 5, 1);
+	draw.text(".", {57 + x_offset, 184}, 5, 1);
+	draw.text(".", {82 + x_offset, 184}, 5, 1);
+	draw.text(":", {107 + x_offset, 184}, 5, 1);
+	draw.text("|", {132 + x_offset, 184}, 5, 1);
 	for (IpButton *ip_button: ip_buttons) {
 		if (!ip_button->button(draw, x_offset)) 
 			continue;

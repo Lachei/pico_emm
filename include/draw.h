@@ -136,11 +136,11 @@ struct SettingsPage {
 	float base_offset{480};
 	
 	IpButton ip1{.button = {{10, 180, 20, 15}, "...", ButtonStyle::BORDER}};
-	IpButton ip2{.button = {{40, 180, 20, 15}, "..."}};
-	IpButton ip3{.button = {{70, 180, 20, 15}, "..."}};
-	IpButton ip4{.button = {{100, 180, 20, 15}, "..."}};
-	IpButton port{.button = {{130, 180, 20, 15}, "...."}};
-	IpButton addr{.button = {{160, 180, 20, 15}, "..."}};
+	IpButton ip2{.button = {{35, 180, 20, 15}, "..."}};
+	IpButton ip3{.button = {{60, 180, 20, 15}, "..."}};
+	IpButton ip4{.button = {{85, 180, 20, 15}, "..."}};
+	IpButton port{.button = {{110, 180, 20, 15}, "...."}};
+	IpButton addr{.button = {{135, 180, 20, 15}, "..."}};
 	std::array<IpButton*, 6> ip_buttons{&ip1, &ip2, &ip3, &ip4, &port, &addr};
 	IpButton *selected_ip{&ip1};
 	Button configure_button{{170, 180, 60, 15}, "Hinzufügen"};
