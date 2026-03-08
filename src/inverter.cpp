@@ -25,7 +25,8 @@ constexpr uint32_t time_s() { return time_us_64() / 1000000; }
 enum class pcb_state {
 	IDLE, CONNECTING, CHECK_SUNS, FIND_COMMON_HDR, GET_COMMON_INFOS, FIND_DATA_HDR, START_DATA_FETCH,
 	GET_INVERTER_INFOS, GET_NAMEPLATE_INFOS, GET_SETTINGS_INFOS, GET_STATUS_INFOS,
-	GET_CONTROLS_INFOS, GET_STORAGE_INFOS, ENABLE_INVERTER_CONTROL, ENABLE_STORAGE_CONTROL, WAIT_DATA_RESPONSE, SET_POWER};
+	GET_CONTROLS_INFOS, GET_MPPT_INFOS, GET_STORAGE_INFOS, ENABLE_INVERTER_CONTROL, ENABLE_STORAGE_CONTROL, 
+	WAIT_DATA_RESPONSE, SET_POWER_INVERTER, SET_POWER_STORAGE, SET_MIN_SOC_STORAGE};
 enum class request_type {NONE, SUNS, SUNS_HEADER, IMP_POWER, EXP_POWER, SOC, P_SET};
 using sunspec_header = model_start;
 template<typename T>
@@ -72,6 +73,8 @@ struct context_t {
 	uint32_t settings_fetched_s{}; // refetched only once every 5 minutes, stays mostly the same
 	int status_addr{-1};
 	uint32_t status_fetched_s{}; // refetched only once every minute, stays mostly the same
+	int mppt_addr{-1}; // mptt has variable length, so length is required
+	int mppt_length{-1};
 	int controls_addr{-1};
 	uint32_t controls_fetched_s{}; // refetched only once, afterwards is only written
 	int storage_addr{-1};
@@ -89,12 +92,17 @@ err_t tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len);
 err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err);
 err_t tcp_pcb_close(tcp_pcb *pcb);
+void advance_context_state(context_t &context, struct pbuf *p = {});
 
 void inverter_infos::initiate_discover_inverters(static_vector<ModbusTcpAddr, 32> *ivs) {
 	configured_inverters = ivs;
 	CHECK_INVERTER_CONFIGURED;
 	connected_names.resize(configured_inverters->size());
+	read_power.resize(configured_inverters->size());
+	control_infos.resize(configured_inverters->size());
 	for(int i: range(connected_names.size())) {
+		if (read_power[i].inverter.device_id == 0)
+			read_power[i].inverter.device_id = get_next_device_id();
 		if (connected_names[i].size())
 			continue;
 		if (!contexts[i].pcb)
@@ -118,6 +126,7 @@ void inverter_infos::initiate_retrieve_infos_all() {
 			continue;
 		}
 		contexts[i].state = pcb_state::START_DATA_FETCH;
+		advance_context_state(contexts[i]);
 	}
 }
 void inverter_infos::initiate_send_power_requests_all() {
@@ -129,8 +138,22 @@ void inverter_infos::initiate_send_power_requests_all() {
 			LogError("Could not send power for {}: {}", connected_names[i].sv(), int(contexts[i].state));
 			continue;
 		}
-		// request_modbus_registers_write(contexts[i], , int register_count);
-		// contexts[i].state = pcb_state::SET_POWER;
+		model_controls *control = contexts[i].modbus.storage.get_addr_as<model_controls>(contexts[i].controls_addr);
+		model_storage *storage = contexts[i].modbus.storage.get_addr_as<model_storage>(contexts[i].storage_addr);
+		// convert requested power to relative values
+		float inv_power_r = std::max(.0f, control_infos[i].requested_power) / control_infos[i].power_max;
+		control->WMaxLimPct = modbus_swap(from_float(inv_power_r, modbus_swap_i16(control->WMaxLimPct_SF)));
+		bool charge = control_infos[i].requested_power < 0;
+		float bat_min_soc = charge ? 100: 0;
+		float bat_cha_r = charge ? 
+					(-control_infos[i].requested_power + read_power[i].pv.exp_w) / control_infos[i].power_max_cha:
+					100;
+		// battery discharge rate always stays at 100%, discharging is controlled via max inverter power
+		storage->MinRsvPct = modbus_swap(from_float(bat_min_soc, modbus_swap_i16(storage->MinRsvPct_SF)));
+		storage->WChaMax = modbus_swap(from_float(bat_cha_r, modbus_swap_i16(storage->WChaMax_SF)));
+
+		contexts[i].state = pcb_state::SET_POWER_INVERTER;
+		advance_context_state(contexts[i]);
 	}
 }
 void inverter_infos::wait_all(uint32_t timeout_ms) {
@@ -155,7 +178,7 @@ void inverter_infos::wait_all(uint32_t timeout_ms) {
 void request_modbus_registers(context_t &context, int offset, int registers);
 void request_modbus_registers_write(context_t &context, int offset, int registers);
 void parse_modbus_frame(context_t &context, struct pbuf *&p);
-void advance_context_state(context_t &context, struct pbuf *p = {}) {
+void advance_context_state(context_t &context, struct pbuf *p) {
 	int i = &context - contexts.begin();
 	pcb_state prev_state = context.state;
 	uint32_t s = time_s();
@@ -229,6 +252,8 @@ void advance_context_state(context_t &context, struct pbuf *p = {}) {
 				case model_nameplate::ID:	context.nameplate_addr = context.last_modbus_addr; break;
 				case model_settings::ID:	context.settings_addr = context.last_modbus_addr; break;
 				case model_status::ID:		context.status_addr = context.last_modbus_addr; break;
+				case model_mppt::ID:		context.mppt_addr = context.last_modbus_addr; 
+								context.mppt_length = hdr->length; break;
 				case model_controls::ID:	context.controls_addr = context.last_modbus_addr; break;
 				case model_storage::ID:		context.storage_addr = context.last_modbus_addr; break;
 				case model_end::ID: 		context.state = pcb_state::ENABLE_STORAGE_CONTROL;
@@ -317,10 +342,19 @@ void advance_context_state(context_t &context, struct pbuf *p = {}) {
 			if (context.controls_fetched_s == 0) {
 				context.controls_fetched_s = s;
 				request_modbus_registers(context, context.controls_addr, suns_sizeof(model_controls{}));
-				context.state = pcb_state::GET_STORAGE_INFOS;
+				context.state = pcb_state::GET_MPPT_INFOS;
 				break;
 			}
 			[[fallthrough]];
+		case pcb_state::GET_MPPT_INFOS:
+			if (p)
+				parse_modbus_frame(context, p);
+			ASSERT_BREAK_CONTEXT(context.mppt_addr == -1, "Mppt address unknown");
+			// always fetch mptt infos
+			context.controls_fetched_s = s;
+			request_modbus_registers(context, context.mppt_addr, context.mppt_length);
+			context.state = pcb_state::GET_STORAGE_INFOS;
+			break;
 		case pcb_state::GET_STORAGE_INFOS:
 			if (p)
 				parse_modbus_frame(context, p);
@@ -336,6 +370,25 @@ void advance_context_state(context_t &context, struct pbuf *p = {}) {
 			if (p)
 				parse_modbus_frame(context, p);
 			context.state = pcb_state::IDLE;
+			break;
+		// Data writing ---------------------------------------------------------
+		case pcb_state::SET_POWER_INVERTER:
+			if (p)
+				parse_modbus_frame(context, p);
+			request_modbus_registers_write(context, context.controls_addr + suns_offsetof(&model_controls::WMaxLimPct), 1);
+			context.state = pcb_state::SET_POWER_STORAGE;
+			break;
+		case pcb_state::SET_POWER_STORAGE:
+			if (p)
+				parse_modbus_frame(context, p);
+			request_modbus_registers_write(context, context.storage_addr + suns_offsetof(&model_storage::WChaMax), 1);
+			context.state = pcb_state::SET_MIN_SOC_STORAGE;
+			break;
+		case pcb_state::SET_MIN_SOC_STORAGE:
+			if (p)
+				parse_modbus_frame(context, p);
+			request_modbus_registers_write(context, context.storage_addr + suns_offsetof(&model_storage::MinRsvPct), 1);
+			context.state = pcb_state::WAIT_DATA_RESPONSE;
 			break;
 	}
 	// get any missing information if there are
@@ -405,6 +458,41 @@ void parse_modbus_frame(context_t &context, struct pbuf *&p) {
 		const model_settings *settings = context.modbus.storage.get_addr_as<model_settings>(context.settings_addr);
 		float max_w = to_float(modbus_swap(settings->WMax), modbus_swap_i16(settings->WMax_SF));
 		inverters().control_infos[i].power_max = max_w;
+	} else if (context.last_modbus_addr == context.status_addr) {
+		const model_status *status = context.modbus.storage.get_addr_as<model_status>(context.status_addr);
+		bitfield16 pv_status = modbus_swap(status->PVConn);
+		bitfield16 bat_status = modbus_swap(status->StorConn);
+		if (pv_status > 0 && inverters().read_power[i].pv.device_id == 0)
+			inverters().read_power[i].pv.device_id = get_next_device_id();
+		if (pv_status == 0 && inverters().read_power[i].pv.device_id != 0)
+			inverters().read_power[i].pv.device_id = 0;
+		if (bat_status > 0 && inverters().read_power[i].battery.device_id == 0)
+			inverters().read_power[i].battery.device_id = get_next_device_id();
+		if (bat_status == 0 && inverters().read_power[i].battery.device_id != 0)
+			inverters().read_power[i].battery.device_id = 0;
+	} else if (context.last_modbus_addr == context.mppt_addr) {
+		constexpr uint16_t mppt_hdr_size = suns_sizeof(model_mppt{}) - 4 * suns_sizeof(mppt_infos{});
+		int mppt_count = (context.mppt_length - mppt_hdr_size) / suns_sizeof(mppt_infos{});
+		const model_mppt *mppt = context.modbus.storage.get_addr_as<model_mppt>(context.mppt_addr);
+		const mppt_infos *mppts = (const mppt_infos*)((const uint16_t*)mppt + mppt_hdr_size);
+		// if battery is enabled it is expected to have the last 2 entries of the mppt infos being battery charge and discharge
+		int bat_count = inverters().read_power[i].battery.device_id == 0 ? 0: 2;
+		inverters().read_power[i].pv.exp_w = 0;
+		int pv_count = mppt_count - bat_count;
+		int16_t pf = modbus_swap_i16(mppt->DCW_SF);
+		for (int i: range(pv_count))
+			inverters().read_power[i].pv.exp_w += to_float(modbus_swap(mppts[i].module_DCW), pf);
+		if (bat_count > 0) {
+			// charging
+			inverters().read_power[i].battery.imp_w = to_float(modbus_swap(mppts[mppt_count - 2].module_DCW), pf);
+			// discharging
+			inverters().read_power[i].battery.exp_w = to_float(modbus_swap(mppts[mppt_count - 1].module_DCW), pf);
+		}
+	} else if (context.last_modbus_addr == context.storage_addr) {
+		const model_storage *storage = context.modbus.storage.get_addr_as<model_storage>(context.storage_addr);
+		inverters().control_infos[i].soc = to_float(modbus_swap(storage->ChaState), modbus_swap_i16(storage->ChaState_SF));
+		inverters().control_infos[i].power_max_cha = to_float(modbus_swap(storage->WChaMax), modbus_swap_i16(storage->WChaMax_SF));
+		inverters().control_infos[i].power_max_discha = inverters().control_infos[i].power_max_cha;
 	}
 }
 

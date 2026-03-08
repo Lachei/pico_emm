@@ -59,10 +59,6 @@ struct Button {
 	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
 	bool is_selected() const;
 };
-constexpr int HOME_ID = 0;
-constexpr int GRID_ID = 1;
-constexpr int METER_ID = 2;
-inline int get_next_device_id() {static int cur_id{METER_ID}; return ++cur_id;}
 struct TimeInfo {
 	uint32_t ms;
 	uint32_t delta_ms;

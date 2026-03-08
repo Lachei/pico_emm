@@ -21,6 +21,7 @@ constexpr inline uint16_t modbus_swap(uint16_t v) { return (v >> 8) | ((v & 0xff
 constexpr inline int16_t modbus_swap_i16(int16_t v) { return int16_t((uint16_t(v) >> 8) | ((uint16_t(v) & 0xff) << 8)) ; }
 constexpr inline float modbus_swap_f(float v) {float r; uint8_t *o = (uint8_t*)&r, *i = (uint8_t*)&v; o[0] = i[3]; o[1] = i[2]; o[2] = i[1]; o[3] = i[0]; return r;}
 constexpr inline float to_float(int val, sunssf scale) { return val * std::pow<float>(10, scale); }
+constexpr inline uint16_t from_float(float val, sunssf scale) { return val * std::pow<float>(10, -scale); }
 template<typename T>
 constexpr inline uint16 model_size() { return sizeof(T) / 2 - 2; }
 template<typename T>
@@ -205,8 +206,21 @@ struct model_controls {
 	sunssf  	OutPFSet_SF		{modbus_swap_i16(-3)};
 	sunssf  	VArPct_SF		{};
 };
+struct mppt_infos{
+	uint16    	module_ID	{};
+	string<16>	module_IDStr	{"MPPT1"};
+	uint16    	module_DCA	{};
+	uint16    	module_DCV	{};
+	uint16    	module_DCW	{};
+	acc32     	module_DCWH	{};
+	uint32    	module_Tms	{};
+	int16     	module_Tmp	{};
+	enum16    	module_DCSt	{};
+	bitfield32	module_DCEvt	{};
+};
 struct model_mppt {
 	static constexpr uint16_t ID{160};
+	static constexpr uint16_t MPPT_COUNT{4};
 	uint16		id_mqtt		{modbus_swap(ID)};
 	uint16    	length_mqtt	{model_sunspec_size<model_mppt>()};
 	sunssf    	DCA_SF		{};
