@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
+#include <cmath>
 
 using uint16 = uint16_t;
 using int16 = int16_t;
@@ -16,12 +17,14 @@ using acc32 = uint32_t;
 using acc64 = uint64_t;
 using sunssf = int16_t; // scale factor means: 10^{sunssf}, so -1 = .1, 2 = 100, -2 = .01
 using pad = uint16_t;
-constexpr uint16_t modbus_swap(uint16_t v) { return (v >> 8) | ((v & 0xff) << 8) ; }
-constexpr int16_t modbus_swap_i16(int16_t v) { return int16_t((uint16_t(v) >> 8) | ((uint16_t(v) & 0xff) << 8)) ; }
+constexpr inline uint16_t modbus_swap(uint16_t v) { return (v >> 8) | ((v & 0xff) << 8) ; }
+constexpr inline int16_t modbus_swap_i16(int16_t v) { return int16_t((uint16_t(v) >> 8) | ((uint16_t(v) & 0xff) << 8)) ; }
+constexpr inline float modbus_swap_f(float v) {float r; uint8_t *o = (uint8_t*)&r, *i = (uint8_t*)&v; o[0] = i[3]; o[1] = i[2]; o[2] = i[1]; o[3] = i[0]; return r;}
+constexpr inline float to_float(int val, sunssf scale) { return val * std::pow<float>(10, scale); }
 template<typename T>
-constexpr uint16 model_size() { return sizeof(T) / 2 - 2; }
+constexpr inline uint16 model_size() { return sizeof(T) / 2 - 2; }
 template<typename T>
-constexpr uint16 model_sunspec_size() { return  modbus_swap(sizeof(T) / 2 - 2); } // division by 2 as we calc in halfes, -2 for id and length
+constexpr inline uint16 model_sunspec_size() { return  modbus_swap(uint16_t(sizeof(T) / 2 - 2)); } // division by 2 as we calc in halfes, -2 for id and length
 
 constexpr uint16 MODE_CHARGE{0};
 constexpr uint16 MODE_DISCHARGE{1};
@@ -261,7 +264,7 @@ struct model_storage {
 	uint16    	WChaMax			{modbus_swap(10000)}; // use this in combination of StorCtl_Mod to set charge/discharge
 	uint16    	WChaGra			{modbus_swap(100)};
 	uint16    	WDisChaGra		{modbus_swap(100)};
-	bitfield16	StorCtl_Mod		{}; // 0: Charge, 1: Discharge
+	bitfield16	StorCtl_Mod		{}; // Bit0: Charge power override, Bit1: Discharge power override
 	uint16    	VAChaMax		{};
 	uint16    	MinRsvPct		{};
 	uint16    	ChaState		{}; // SOC 
