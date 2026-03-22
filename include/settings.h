@@ -2,6 +2,7 @@
 
 #include <iostream>
 
+#include "AppConfig.h"
 #include "static_types.h"
 #include "ranges_util.h"
 #include "string_util.h"
@@ -10,7 +11,7 @@
 inline bool request_settings_store{};
 inline bool request_settings_load{};
 struct settings {
-	static_vector<ModbusTcpAddr, 32> configured_inverters{};
+	static_vector<ModbusTcpAddr, MAX_INVERTERS> configured_inverters{};
 
 	static settings& Default() {
 		static settings s{};
@@ -80,6 +81,6 @@ struct runtime_state {
 		static runtime_state r{};
 		return r;
 	}
-	static_vector<AddrName, 32> found_ips{};
+	static_vector<AddrName, MAX_INVERTERS> found_ips{};
 };
 

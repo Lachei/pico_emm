@@ -40,8 +40,8 @@ struct model_start {
 	string<4> 	sid{'S','u','n','S'};
 };
 struct model_common {
-	static constexpr uint16_t ID{1};
-	uint16		id_common{modbus_swap(ID)};
+	static constexpr uint16_t ID{modbus_swap(1)};
+	uint16		id_common{ID};
 	uint16		length_common{model_sunspec_size<model_common>()};
 	string<32> 	manufacturer{"Lachei"};
 	string<32> 	device_model{"victron iot 1.0"};
@@ -51,8 +51,8 @@ struct model_common {
 	uint16		device_address{modbus_swap(1)};
 };
 struct model_inverter {
-	static constexpr uint16_t ID{113};
-	uint16		id_inverter{modbus_swap(ID)};
+	static constexpr uint16_t ID{modbus_swap(113)};
+	uint16		id_inverter{ID};
 	uint16		length_inverter{model_sunspec_size<model_inverter>()};
 	float32   	A       {};
 	float32   	AphA    {};
@@ -87,8 +87,8 @@ struct model_inverter {
 	bitfield32	EvtVnd4 {};
 };
 struct model_nameplate {
-	static constexpr uint16_t ID{120};
-	uint16		id_nameplate	{modbus_swap(ID)};
+	static constexpr uint16_t ID{modbus_swap(120)};
+	uint16		id_nameplate	{ID};
 	uint16		length_nameplate{model_sunspec_size<model_nameplate>()};
 	enum16		DERTyp		{modbus_swap(82)}; // PV_STOR
 	uint16		WRtg		{};
@@ -118,8 +118,8 @@ struct model_nameplate {
 	pad   		pad_nampelate	{};
 };
 struct model_settings {
-	static constexpr uint16_t ID{121};
-	uint16		id_settings	{modbus_swap(ID)};
+	static constexpr uint16_t ID{modbus_swap(121)};
+	uint16		id_settings	{ID};
 	uint16    	length_settings	{model_sunspec_size<model_settings>()};
 	uint16    	WMax		{};
 	uint16    	VRef		{};
@@ -153,8 +153,8 @@ struct model_settings {
 	sunssf    	ECPNomHz_SF     {modbus_swap_i16(0)};
 };
 struct model_status {
-	static constexpr uint16_t ID{122};
-	uint16		id_status	{modbus_swap(ID)};
+	static constexpr uint16_t ID{modbus_swap(122)};
+	uint16		id_status	{ID};
 	uint16    	length_status	{model_sunspec_size<model_status>()};
 	bitfield16	PVConn		{modbus_swap(1 | 2 | 4)}; // Bit0: Connected, Bit1: Available, Bit2: Operating
 	bitfield16	StorConn	{modbus_swap(1 | 2 | 4)}; // Bit0: Connected, Bit1: Available, Bit2: Operating
@@ -178,8 +178,8 @@ struct model_status {
 	sunssf    	Ris_SF		{};
 };
 struct model_controls {
-	static constexpr uint16_t ID{123};
-	uint16		id_controls		{modbus_swap(ID)};
+	static constexpr uint16_t ID{modbus_swap(123)};
+	uint16		id_controls		{ID};
 	uint16  	id_length		{model_sunspec_size<model_controls>()};
 	uint16  	Conn_WinTms		{};
 	uint16  	Conn_RvrtTms		{};
@@ -219,9 +219,9 @@ struct mppt_infos{
 	bitfield32	module_DCEvt	{};
 };
 struct model_mppt {
-	static constexpr uint16_t ID{160};
+	static constexpr uint16_t ID{modbus_swap(160)};
 	static constexpr uint16_t MPPT_COUNT{4};
-	uint16		id_mqtt		{modbus_swap(ID)};
+	uint16		id_mqtt		{ID};
 	uint16    	length_mqtt	{model_sunspec_size<model_mppt>()};
 	sunssf    	DCA_SF		{};
 	sunssf    	DCV_SF		{};
@@ -272,8 +272,8 @@ struct model_mppt {
 	bitfield32	module_4_DCEvt	{};
 };
 struct model_storage {
-	static constexpr uint16_t ID{124};
-	uint16		id_storage		{modbus_swap(ID)};
+	static constexpr uint16_t ID{modbus_swap(124)};
+	uint16		id_storage		{ID};
 	uint16		length_storage		{model_sunspec_size<model_storage>()};
 	uint16    	WChaMax			{modbus_swap(10000)}; // use this in combination of StorCtl_Mod to set charge/discharge
 	uint16    	WChaGra			{modbus_swap(100)};

@@ -106,6 +106,11 @@ static std::array<InverterGroup, 3> test_groups{
 	},
 };
 
+static static_vector<ModbusTcpAddr, MAX_INVERTERS> is {.storage = {
+	ModbusTcpAddr{.ip = LWIP_MAKEU32(192,168,178,113), .port = 502, .modbus_id = 1},
+	ModbusTcpAddr{.ip = LWIP_MAKEU32(192,168,178,181), .port = 502, .modbus_id = 1}}, 
+	.cur_size = 2};
+
 static PowerInfo meter_power {.device_id = METER_ID, .imp_w = 1000, .exp_w = 0};
 static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 2700, .exp_w = 0};
 
@@ -158,10 +163,8 @@ void display_task(void *) {
 	uint32_t last_inverter_discovery{};
 	for (;;) {
 		uint32_t ms = time_ms();
-		uint32_t s = time_s();
 
 		// single place where storaeg is loaded and written
-		bool rediscover_inverters = request_settings_store || s - last_inverter_discovery >= 10;
 		if (request_settings_store) {
 			screen().wait_for_vsync();
 			persistent_storage_t::Default().write(settings::Default(), &persistent_storage_layout::persistent_settings);
@@ -245,6 +248,21 @@ void touchscreen_task(void *) {
 		}
 	}
 }
+void modbus_task(void *) {
+	LogInfo("Modbus thread started");
+	for (;;) {
+		if (!wifi_storage::Default().wifi_connected) {
+			vTaskDelay(pdMS_TO_TICKS(1000));
+			continue;
+		}
+		LogInfo("Next iteration");
+		inverters().initiate_discover_inverters(&is);
+		inverters().initiate_retrieve_infos_all();
+		inverters().wait_all(1000);
+		vTaskDelay(pdMS_TO_TICKS(1000));
+	}
+
+}
 
 void usb_comm_task(void *) {
 	LogInfo("Usb communication task started");
@@ -313,6 +331,7 @@ void startup_task(void *) {
 	xTaskCreate(wifi_search_task, "UpdateWifiThread", 512, NULL, 1, NULL);
 	xTaskCreate(display_task, "DisplayThread", 512, NULL, 1, NULL);
 	xTaskCreate(touchscreen_task, "TouchscreenThread", 512, NULL, 1, NULL);
+	xTaskCreate(modbus_task, "ModbusThread", 512, NULL, 1, NULL);
 	cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
 	vTaskDelete(NULL); // remove this task for efficiency reasions
 }
