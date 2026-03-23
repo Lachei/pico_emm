@@ -256,10 +256,11 @@ void modbus_task(void *) {
 			continue;
 		}
 		LogInfo("Next iteration");
+		uint32_t start_ms = time_ms();
 		inverters().initiate_discover_inverters(&is);
 		inverters().initiate_retrieve_infos_all();
 		inverters().wait_all(1000);
-		vTaskDelay(pdMS_TO_TICKS(1000));
+		vTaskDelay(pdMS_TO_TICKS(std::max(1000 - int(time_ms() - start_ms), 0)));
 	}
 
 }
@@ -289,7 +290,7 @@ void wifi_search_task(void *) {
 		wifi_storage::Default().update_wifi_connection();
 		if (wifi_storage::Default().wifi_connected)
 			last_conn = cur_time;
-		if (dt % 30 == 5) // every 30 seconds enable reconnect try
+		if (dt % 30 == 7) // every 30 seconds enable reconnect try
 			wifi_storage::Default().wifi_changed = true;
 		if (dt > ap_timeout) {
 			access_point::Default().init();

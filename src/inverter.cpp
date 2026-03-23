@@ -107,8 +107,6 @@ void inverter_infos::initiate_discover_inverters(static_vector<ModbusTcpAddr, MA
 	for(int i: range(connected_names.size())) {
 		if (read_power[i].inverter.device_id == 0)
 			read_power[i].inverter.device_id = get_next_device_id();
-		if (connected_names[i].size())
-			continue;
 		if (!contexts[i].pcb)
 			init_pcb(contexts[i]);
 		if (!contexts[i].pcb)
@@ -174,24 +172,22 @@ void inverter_infos::wait_all(uint32_t timeout_ms) {
 		if (contexts[i].connected && contexts[i].wait_receive)
 			ulTaskNotifyTakeIndexed(i, pdTRUE, pdMS_TO_TICKS(std::max(0, int(end_ms) - int(time_ms()))));
 	for (int i: range(contexts.size())) {
-		LogInfo("Got inverter power: {}W", read_power[i].inverter.exp_w - read_power[i].inverter.imp_w);
-		LogInfo("Got bat power: {}W", read_power[i].battery.exp_w - read_power[i].battery.imp_w);
 		if (contexts[i].state == pcb_state::IDLE) {
 			contexts[i].wait_count = 0;
 			contexts[i].wait_receive = false;
 		}
-		if (++contexts[i].wait_count > 5) {
+		bool timeout = ++contexts[i].wait_count > 3;
+		if (timeout) {
 			contexts[i].wait_count = 0;
 			LogInfo("Wait expired, initiate reconnection");
-			contexts[i].wait_receive = false;
-			contexts[i].request_close = true;
 		}
-		if (contexts[i].request_close) {
+		if (contexts[i].request_close || timeout) {
 			tcp_pcb_close(contexts[i].pcb); // only close the pcb, dont reorder
 			contexts[i].pcb = {};
 			contexts[i].connected = false;
 			contexts[i].request_close = false;
-			connected_names[i] = {}; // resetting name signals disconnected inverter
+			if (!timeout)
+				connected_names[i] = {}; // resetting name signals disconnected inverter
 		}
 	}
 }
@@ -212,8 +208,13 @@ void advance_context_state(context_t &context, struct pbuf *p) {
 			break;
 		// Connection setup cases ---------------------------------------------------------
 		case pcb_state::CONNECTING:
-			LogInfo("Connected, requesting Suns register {}ms", time_ms());
 			context.connected = true;
+			if (inverters().connected_names[i].size()) {
+				LogInfo("Connected to inverter, got base info already");
+				context.state = pcb_state::IDLE;
+				break;
+			}
+			LogInfo("Connected, requesting Suns register {}ms", time_ms());
 			// check sunspec header
 			request_modbus_registers(context, generic_halfs_registers::OFFSET, suns_sizeof(sunspec_header{}));
 			context.state = pcb_state::CHECK_SUNS;
@@ -253,14 +254,14 @@ void advance_context_state(context_t &context, struct pbuf *p) {
 		case pcb_state::GET_COMMON_INFOS: {
 			LogInfo("Reading common info");
 			parse_modbus_frame(context, p);
-			const model_common *common = context.modbus.storage.get_addr_as<model_common>(context.last_modbus_addr);
+			const string<32> *common = context.modbus.storage.get_addr_as<string<32>>(context.last_modbus_addr);
 			if (!common) {
 				LogError("Could not get model common registers");
 				context.request_close = true;
 				break;
 			}
-			LogInfo("Model name: {}", to_sv(common->device_model));
-			inverters().connected_names[i].fill(to_sv(common->device_model));
+			LogInfo("Model name: {}", to_sv(*common));
+			inverters().connected_names[i].fill(to_sv(*common));
 			request_modbus_registers(context, context.next_hdr_addr, SUNSPEC_HDR_SIZE);
 			context.state = pcb_state::FIND_DATA_HDR;
 			break;
@@ -356,9 +357,9 @@ void advance_context_state(context_t &context, struct pbuf *p) {
 			if (p)
 				parse_modbus_frame(context, p);
 			ASSERT_BREAK_CONTEXT(context.status_addr != -1, "Status address unknown");
-			if (s - context.status_fetched_s >= STATUS_REFETCH_S) {
+			if (context.status_fetched_s == 0 || s - context.status_fetched_s >= STATUS_REFETCH_S) {
 				context.status_fetched_s = s;
-				request_modbus_registers(context, context.settings_addr, suns_sizeof(model_settings{}));
+				request_modbus_registers(context, context.status_addr, suns_sizeof(model_status{}));
 				context.state = pcb_state::GET_CONTROLS_INFOS;
 				break;
 			}
@@ -420,7 +421,8 @@ void advance_context_state(context_t &context, struct pbuf *p) {
 			context.state = pcb_state::WAIT_DATA_RESPONSE;
 			break;
 	}
-	// get any missing information if there are
+	if (context.state == pcb_state::IDLE)
+		context.wait_receive = false;
 	if (context.state == pcb_state::IDLE && prev_state != pcb_state::IDLE) // wakeup main task
 		xTaskNotifyGiveIndexed(parent_task, i);
 }
@@ -432,7 +434,7 @@ void request_modbus_registers(context_t &context, int offset, int register_count
 	ASSERT_OK_RETURN(context.modbus.start_tcp_frame(context.tcp_frame++, inverters().configured_inverters[0][i].modbus_id));
 	auto [res, err] = context.modbus.get_frame_read(libmodbus_static::register_t::HALFS, offset, register_count);
 	ASSERT_OK_RETURN(err);
-	err_t error = tcp_write(context.pcb, res.data(), res.size(), TCP_WRITE_FLAG_COPY);
+	err_t error = tcp_write(context.pcb, res.data(), res.size(), 0);
 	if (error != ERR_OK) {
 		LogError("Error sending modbus read frame {}", error);
 		return;
@@ -450,7 +452,7 @@ void request_modbus_registers_write(context_t &context, int offset, int register
 	ASSERT_OK_RETURN(context.modbus.start_tcp_frame(context.tcp_frame++, inverters().configured_inverters[0][i].modbus_id));
 	auto [res, err] = context.modbus.get_frame_write(libmodbus_static::register_t::HALFS_WRITE, offset, data);
 	ASSERT_OK_RETURN(err);
-	err_t error = tcp_write(context.pcb, res.data(), res.size(), TCP_WRITE_FLAG_COPY);
+	err_t error = tcp_write(context.pcb, res.data(), res.size(), 0);
 	if (error != ERR_OK)
 		LogError("Error sending modbus write frame {}", error);
 }
@@ -509,11 +511,11 @@ void parse_modbus_frame(context_t &context, struct pbuf *&p) {
 		if (bat_status == 0 && inverters().read_power[i].battery.device_id != 0)
 			inverters().read_power[i].battery.device_id = 0;
 	} else if (context.last_modbus_addr == context.mppt_addr) {
-		LogInfo("Got mppt info");
 		constexpr uint16_t mppt_hdr_size = suns_sizeof(model_mppt{}) - 4 * suns_sizeof(mppt_infos{});
-		int mppt_count = (context.mppt_length - mppt_hdr_size) / suns_sizeof(mppt_infos{});
+		static_assert(mppt_hdr_size == 10);
 		const model_mppt *mppt = context.modbus.storage.get_addr_as<model_mppt>(context.mppt_addr);
-		const mppt_infos *mppts = (const mppt_infos*)((const uint16_t*)mppt + mppt_hdr_size);
+		int mppt_count = modbus_swap(mppt->N);
+		const mppt_infos *mppts = (const mppt_infos*)(((const uint16_t*)mppt) + mppt_hdr_size);
 		// if battery is enabled it is expected to have the last 2 entries of the mppt infos being battery charge and discharge
 		int bat_count = inverters().read_power[i].battery.device_id == 0 ? 0: 2;
 		inverters().read_power[i].pv.exp_w = 0;
@@ -581,9 +583,10 @@ err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
 	return ERR_OK;
 }
 void tcp_err_cb(void *arg, err_t err) {
-	LogInfo("Error callback");
+	LogInfo("Error callback: {}", err);
 	context_t &self = (*(context_t*)arg);
 	self.pcb = {};
 	self.connected = false;
 	self.state = pcb_state::IDLE;
+	xTaskNotifyGiveIndexed(parent_task, &self - contexts.begin());
 }
