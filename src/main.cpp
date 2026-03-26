@@ -354,3 +354,7 @@ int main( void )
 	vTaskStartScheduler();
 	return 0;
 }
+
+void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName ) {
+	std::cout << "Stack overflow in task " << pcTaskName << std::endl;
+}
