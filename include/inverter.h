@@ -5,7 +5,6 @@
 #include "AppConfig.h"
 #include "emm_structs.h"
 
-constexpr std::string_view CONNECTING{"Vebinde..."}; // default name given to requested discovers which can be used to identify not yet connected inverters
 // used to retrieve and set power information for all inverters
 struct inverter_infos {
     // general inverter information

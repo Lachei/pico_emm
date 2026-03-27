@@ -44,3 +44,6 @@ constexpr int GRID_ID = 1;
 constexpr int METER_ID = 2;
 inline int get_next_device_id() {static int cur_id{METER_ID}; return ++cur_id;}
 
+constexpr std::string_view NOT_CONNECTED{"Nicht verbunden"};
+constexpr std::string_view CONNECTING{"Verbinde..."};
+

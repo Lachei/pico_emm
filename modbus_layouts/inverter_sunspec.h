@@ -26,6 +26,15 @@ template<typename T>
 constexpr inline uint16 model_size() { return sizeof(T) / 2 - 2; }
 template<typename T>
 constexpr inline uint16 model_sunspec_size() { return  modbus_swap(uint16_t(sizeof(T) / 2 - 2)); } // division by 2 as we calc in halfes, -2 for id and length
+template<typename T>
+constexpr inline int suns_sizeof(const T& = {}) { return sizeof(T) / 2; }
+template<typename T>
+constexpr inline int suns_offsetof(T member) { return (int(*(uintptr_t*)(&member))) / 2; }
+struct suns_hdr{
+	uint16_t id;
+	uint16_t _length; // careful, is normally still modbus byte swapped
+	int length() const { return modbus_swap(_length); }
+};
 
 constexpr uint16 MODE_CHARGE{0};
 constexpr uint16 MODE_DISCHARGE{1};
@@ -306,7 +315,7 @@ struct model_end {
 	uint16		length_end	{0};
 };
 
-struct sunspec_registers: 
+struct inverter_registers: 
 	public model_start,
 	public model_common,
 	public model_inverter,
@@ -322,5 +331,9 @@ struct sunspec_registers:
 
 struct inverter_layout {
 	// sunspec modbus layout only has writable halfs registers
-	sunspec_registers halfs_registers{};
+	inverter_registers halfs_registers{};
 };
+
+using sunspec_header = model_start;
+constexpr int SUNSPEC_HDR_SIZE = suns_sizeof(sunspec_header{});
+static_assert(SUNSPEC_HDR_SIZE == 2);

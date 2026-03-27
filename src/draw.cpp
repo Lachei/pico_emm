@@ -696,10 +696,30 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 		*r_ip = *r.found_ips.pop();
 	};
 
-	delete_buttons.resize(s.configured_inverters.size());
 	draw.set_pen(0);
-	int cur_y = 30;
-	draw.text("Verbundene Geräte:", {10 + x_offset, cur_y}, 100, 1);
+
+	// configure smart meter
+	ModbusTcpAddr &meter = s.configured_meter;
+	draw.text("Smart meter:", {10 + x_offset, 34}, 100, 1);
+	if (ip1_m.button.text == "..." && meter.ip != 0) {
+		ip1_m.str.fill_formatted("{}", meter.ip >> 24);
+		ip2_m.str.fill_formatted("{}", (meter.ip >> 16) & 0xf);
+		ip3_m.str.fill_formatted("{}", (meter.ip >> 8) & 0xf);
+		ip4_m.str.fill_formatted("{}", meter.ip & 0xf);
+		port_m.str.fill_formatted("{}", meter.port);
+		addr_m.str.fill_formatted("{}", (int)meter.modbus_id);
+		ip1_m.button.text = ip1_m.str.sv();
+		ip2_m.button.text = ip2_m.str.sv();
+		ip3_m.button.text = ip3_m.str.sv();
+		ip4_m.button.text = ip4_m.str.sv();
+		port_m.button.text = port_m.str.sv();
+		addr_m.button.text = addr_m.str.sv();
+	}
+
+	// configure inverter
+	int cur_y = 50;
+	delete_buttons.resize(s.configured_inverters.size());
+	draw.text("Verbundene Wechselrichter:", {10 + x_offset, cur_y}, 150, 1);
 	cur_y += 15;
 	int row{};
 	for (const auto &[a, name]: r.found_ips) {
@@ -734,6 +754,11 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 	draw.set_pen(0);
 	draw.text("Neues Gerät konfigurieren:", {10 + x_offset, 160}, 140, 1);
 	
+	draw.text(".", {112 + x_offset, 34}, 5, 1);
+	draw.text(".", {137 + x_offset, 34}, 5, 1);
+	draw.text(".", {162 + x_offset, 34}, 5, 1);
+	draw.text(":", {187 + x_offset, 34}, 5, 1);
+	draw.text("|", {212 + x_offset, 34}, 5, 1);
 	draw.text(".", {32 + x_offset, 184}, 5, 1);
 	draw.text(".", {57 + x_offset, 184}, 5, 1);
 	draw.text(".", {82 + x_offset, 184}, 5, 1);
@@ -750,19 +775,30 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 	}
 	if (configure_button(draw, x_offset)) {
 		ModbusTcpAddr a{};
-		a.ip |= std::clamp(to_int(ip1.button.text).value_or(0), 0, 255) << 24;
-		a.ip |= std::clamp(to_int(ip2.button.text).value_or(0), 0, 255) << 16;
-		a.ip |= std::clamp(to_int(ip3.button.text).value_or(0), 0, 255) << 8;
-		a.ip |= std::clamp(to_int(ip4.button.text).value_or(0), 0, 255);
-		a.port = to_int(port.button.text).value_or(0);
-		a.modbus_id = std::clamp(to_int(addr.button.text).value_or(0), 0, 255);
-		bool ip_exists = s.configured_inverters | find{a};
-		if (!ip_exists && s.configured_inverters.push(a))
-			request_settings_store = true;
-		else if (ip_exists)
-			LogWarning("Addr {}.{}.{}.{}:{}|{} already exists", ip1.button.text, ip2.button.text, ip3.button.text, ip4.button.text, port.button.text, addr.button.text);
-		else
-			LogError("Failed to add new ip");
+		if (selected_ip == &ip1 || selected_ip == &ip2 || selected_ip == &ip3 || selected_ip == &ip4 || selected_ip == &port || selected_ip == &addr) {
+			a.ip |= std::clamp(to_int(ip1.button.text).value_or(0), 0, 255) << 24;
+			a.ip |= std::clamp(to_int(ip2.button.text).value_or(0), 0, 255) << 16;
+			a.ip |= std::clamp(to_int(ip3.button.text).value_or(0), 0, 255) << 8;
+			a.ip |= std::clamp(to_int(ip4.button.text).value_or(0), 0, 255);
+			a.port = to_int(port.button.text).value_or(0);
+			a.modbus_id = std::clamp(to_int(addr.button.text).value_or(0), 0, 255);
+			bool ip_exists = s.configured_inverters | find{a};
+			if (!ip_exists && s.configured_inverters.push(a))
+				request_settings_store = true;
+			else if (ip_exists)
+				LogWarning("Addr {}.{}.{}.{}:{}|{} already exists", ip1.button.text, ip2.button.text, ip3.button.text, ip4.button.text, port.button.text, addr.button.text);
+			else
+				LogError("Failed to add new ip");
+		} else {
+			a.ip |= std::clamp(to_int(ip1_m.button.text).value_or(0), 0, 255) << 24;
+			a.ip |= std::clamp(to_int(ip2_m.button.text).value_or(0), 0, 255) << 16;
+			a.ip |= std::clamp(to_int(ip3_m.button.text).value_or(0), 0, 255) << 8;
+			a.ip |= std::clamp(to_int(ip4_m.button.text).value_or(0), 0, 255);
+			a.port = to_int(port_m.button.text).value_or(0);
+			a.modbus_id = std::clamp(to_int(addr_m.button.text).value_or(0), 0, 255);
+			request_settings_store = a != s.configured_meter;
+			s.configured_meter = a;
+		}
 	}
 	const auto le = [] (char c, int i) { if (c == '0') return true; return (c - '1') <= i - 1; };
 	for (Button *button: number_inputs) {
@@ -771,7 +807,7 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 		if (button == &ix) {
 			selected_ip->str.pop();
 			selected_ip->button.text = selected_ip->str.sv();
-		} else if (selected_ip == &port) {
+		} else if (selected_ip == &port || selected_ip == &port_m) {
 			uint32_t p = to_int(port.button.text).value_or(0);
 			bool can_append = 10 * p + to_int(button->text).value_or(0) <= 0xffff;
 			if (can_append) {

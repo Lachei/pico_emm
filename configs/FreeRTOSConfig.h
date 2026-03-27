@@ -39,6 +39,8 @@
  *
  * See http://www.freertos.org/a00110.html
  *----------------------------------------------------------*/
+#include "AppConfig.h"
+
 
 #define configCPU_CLOCK_HZ                      (CPU_CLOCK_MHZ UL * 1000000)
 
@@ -63,7 +65,7 @@
 #define configUSE_QUEUE_SETS                    1
 #define configUSE_TIME_SLICING                  1
 #define configUSE_NEWLIB_REENTRANT              0
-#define configTASK_NOTIFICATION_ARRAY_ENTRIES   32  // is used for power synchronization, so as many entries are needed as inverters are supported
+#define configTASK_NOTIFICATION_ARRAY_ENTRIES   (MAX_INVERTERS + 1) // is used for power synchronization, so as many entries are needed as inverters are supported + 1 for meter
 // todo need this for lwip FreeRTOS sys_arch to compile
 #define configENABLE_BACKWARD_COMPATIBILITY     1
 #define configNUM_THREAD_LOCAL_STORAGE_POINTERS 5

@@ -5,6 +5,7 @@
 #include "inverter_sunspec.h"
 
 #include "pico/stdlib.h"
+#include "pico/cyw43_arch.h"
 
 #include <FreeRTOS.h>
 #include <task.h>
@@ -28,21 +29,9 @@ enum class pcb_state {
 	GET_CONTROLS_INFOS, GET_MPPT_INFOS, GET_STORAGE_INFOS, ENABLE_INVERTER_CONTROL, ENABLE_STORAGE_CONTROL, 
 	WAIT_DATA_RESPONSE, SET_POWER_INVERTER, SET_POWER_STORAGE, SET_MIN_SOC_STORAGE};
 enum class request_type {NONE, SUNS, SUNS_HEADER, IMP_POWER, EXP_POWER, SOC, P_SET};
-using sunspec_header = model_start;
-template<typename T>
-constexpr inline int suns_sizeof(const T& = {}) { return sizeof(T) / 2; }
-template<typename T>
-constexpr inline int suns_offsetof(T member) { return (int(*(uintptr_t*)(&member))) / 2; }
-constexpr int SUNSPEC_HDR_SIZE = suns_sizeof(sunspec_header{});
-static_assert(SUNSPEC_HDR_SIZE == 2);
-struct suns_hdr{
-	uint16_t id;
-	uint16_t _length; // careful, is normally still modbus byte swapped
-	int length() const { return modbus_swap(_length); }
-};
 struct generic_halfs_registers {
 	constexpr static int OFFSET = 40000;
-	std::array<uint16_t, sizeof(inverter_layout) + 100> data;
+	std::array<uint16_t, suns_sizeof(inverter_layout{}) + 100> data;
 };
 struct generic_modbus_layout {
 	generic_halfs_registers halfs_registers{};
@@ -89,13 +78,13 @@ struct context_t {
 static static_vector<context_t, MAX_INVERTERS> contexts{};
 static TaskHandle_t parent_task{};
 
-void init_pcb(context_t &context);
-void tcp_err_cb(void *arg, err_t err);
-err_t tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
-err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len);
-err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err);
-err_t tcp_pcb_close(tcp_pcb *pcb);
-void advance_context_state(context_t &context, struct pbuf *p = {});
+static void init_pcb(context_t &context);
+static void tcp_err_cb(void *arg, err_t err);
+static err_t tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
+static err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len);
+static err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err);
+static err_t tcp_pcb_close(tcp_pcb *pcb);
+static void advance_context_state(context_t &context, struct pbuf *p = {});
 
 void inverter_infos::initiate_discover_inverters(static_vector<ModbusTcpAddr, MAX_INVERTERS> *ivs) {
 	configured_inverters = ivs;
@@ -107,8 +96,11 @@ void inverter_infos::initiate_discover_inverters(static_vector<ModbusTcpAddr, MA
 	for(int i: range(connected_names.size())) {
 		if (read_power[i].inverter.device_id == 0)
 			read_power[i].inverter.device_id = get_next_device_id();
-		if (!contexts[i].pcb)
+		if (!contexts[i].pcb) {
+			cyw43_arch_lwip_begin();
 			init_pcb(contexts[i]);
+			cyw43_arch_lwip_end();
+		}
 		if (!contexts[i].pcb)
 			continue; // error if failed to crate will be already printed by init_pcb
 		ip_addr_t ip{.addr = PP_HTONL(configured_inverters[0][i].ip)};
@@ -116,7 +108,9 @@ void inverter_infos::initiate_discover_inverters(static_vector<ModbusTcpAddr, MA
 			LogInfo("Tcp connect inverter");
 			contexts[i].state = pcb_state::CONNECTING;
 			contexts[i].wait_receive = true;
+			cyw43_arch_lwip_begin();
 			tcp_connect(contexts[i].pcb, &ip, configured_inverters[0][i].port, tcp_connect_cb);
+			cyw43_arch_lwip_end();
 		}
 	}
 }
@@ -129,12 +123,14 @@ void inverter_infos::initiate_retrieve_infos_all() {
 		if (connected_names[i].empty() || !contexts[i].connected)
 			continue;
 		if (contexts[i].state != pcb_state::IDLE) {
-			LogError("Could not start info retrieval for {}: {}, retry {}", connected_names[i].sv(), int(contexts[i].state), contexts[i].wait_count);
+			LogError("Start info failed {}: {}, retry {}", connected_names[i].sv(), int(contexts[i].state), contexts[i].wait_count);
 			continue;
 		}
 		contexts[i].wait_receive = true;
 		contexts[i].state = pcb_state::START_DATA_FETCH;
+		cyw43_arch_lwip_begin();
 		advance_context_state(contexts[i]);
+		cyw43_arch_lwip_end();
 	}
 }
 void inverter_infos::initiate_send_power_requests_all() {
@@ -162,7 +158,9 @@ void inverter_infos::initiate_send_power_requests_all() {
 
 		contexts[i].wait_receive = true;
 		contexts[i].state = pcb_state::SET_POWER_INVERTER;
+		cyw43_arch_lwip_begin();
 		advance_context_state(contexts[i]);
+		cyw43_arch_lwip_end();
 	}
 }
 void inverter_infos::wait_all(uint32_t timeout_ms) {
@@ -182,7 +180,9 @@ void inverter_infos::wait_all(uint32_t timeout_ms) {
 			LogInfo("Wait expired, initiate reconnection");
 		}
 		if (contexts[i].request_close || timeout) {
+			cyw43_arch_lwip_begin();
 			tcp_pcb_close(contexts[i].pcb); // only close the pcb, dont reorder
+			cyw43_arch_lwip_end();
 			contexts[i].pcb = {};
 			contexts[i].connected = false;
 			contexts[i].request_close = false;
@@ -195,16 +195,16 @@ void inverter_infos::wait_all(uint32_t timeout_ms) {
 // private implementations
 
 // modbus logic functions ------------------------------------------------------------------------------
-void request_modbus_registers(context_t &context, int offset, int registers);
-void request_modbus_registers_write(context_t &context, int offset, int registers);
-void parse_modbus_frame(context_t &context, struct pbuf *&p);
-void advance_context_state(context_t &context, struct pbuf *p) {
+static void request_modbus_registers(context_t &context, int offset, int registers);
+static void request_modbus_registers_write(context_t &context, int offset, int registers);
+static void parse_modbus_frame(context_t &context, struct pbuf *&p);
+static void advance_context_state(context_t &context, struct pbuf *p) {
 	int i = &context - contexts.begin();
 	pcb_state prev_state = context.state;
 	uint32_t s = time_s();
 	switch(context.state) {
 		case pcb_state::IDLE:
-			contexts[i].wait_count = 0;
+			context.wait_count = 0;
 			break;
 		// Connection setup cases ---------------------------------------------------------
 		case pcb_state::CONNECTING:
@@ -426,7 +426,7 @@ void advance_context_state(context_t &context, struct pbuf *p) {
 	if (context.state == pcb_state::IDLE && prev_state != pcb_state::IDLE) // wakeup main task
 		xTaskNotifyGiveIndexed(parent_task, i);
 }
-void request_modbus_registers(context_t &context, int offset, int register_count) {
+static void request_modbus_registers(context_t &context, int offset, int register_count) {
 	// LogInfo("Getting registers {}-{}", offset, offset + register_count);
 	int i = &context - contexts.begin();
 	context.modbus.switch_to_request();
@@ -443,7 +443,7 @@ void request_modbus_registers(context_t &context, int offset, int register_count
 	if (error != ERR_OK)
 		LogError("Error output modbus read frame {}", error);
 }
-void request_modbus_registers_write(context_t &context, int offset, int register_count) {
+static void request_modbus_registers_write(context_t &context, int offset, int register_count) {
 	int i = &context - contexts.begin();
 	context.modbus.switch_to_request();
 	context.last_modbus_addr = offset;
@@ -456,7 +456,7 @@ void request_modbus_registers_write(context_t &context, int offset, int register
 	if (error != ERR_OK)
 		LogError("Error sending modbus write frame {}", error);
 }
-void parse_modbus_frame(context_t &context, struct pbuf *&p) {
+static void parse_modbus_frame(context_t &context, struct pbuf *&p) {
 	if (!p) {
 		LogError("Cant parse modbus frame because its empty");
 	}
@@ -538,7 +538,7 @@ void parse_modbus_frame(context_t &context, struct pbuf *&p) {
 }
 
 // pcb handle functions --------------------------------------------------------------------------------
-void init_pcb(context_t &context) {
+static void init_pcb(context_t &context) {
 	struct tcp_pcb* &pcb = context.pcb;
 	pcb = tcp_new();
 	if (!pcb) {
@@ -551,7 +551,7 @@ void init_pcb(context_t &context) {
 	tcp_recv(pcb, tcp_recv_cb);
 	tcp_sent(pcb, tcp_sent_cb);
 }
-err_t tcp_pcb_close(tcp_pcb *pcb) { 
+static err_t tcp_pcb_close(tcp_pcb *pcb) { 
 	LogInfo("close tcp_pcb");
 	err_t err = ERR_OK;
 	if (pcb) {
@@ -568,21 +568,22 @@ err_t tcp_pcb_close(tcp_pcb *pcb) {
 	}; 
 	return err;
 }
-err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err) {
+static err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err) {
 	context_t &self = (*(context_t*)arg);
 	self.pcb = tpcb;
+	self.pcb->so_options |= SOF_KEEPALIVE;
 	advance_context_state(self);
 	return ERR_OK;
 }
-err_t tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+static err_t tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
 	context_t &self = (*(context_t*)arg);
 	advance_context_state(self, p);
 	return ERR_OK;
 }
-err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
+static err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
 	return ERR_OK;
 }
-void tcp_err_cb(void *arg, err_t err) {
+static void tcp_err_cb(void *arg, err_t err) {
 	LogInfo("Error callback: {}", err);
 	context_t &self = (*(context_t*)arg);
 	self.pcb = {};

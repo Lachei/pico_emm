@@ -34,6 +34,7 @@
 #include "FT6236.h"
 #include "psram.h"
 #include "inverter.h"
+#include "meter.h"
 
 #define TEST_TASK_PRIORITY ( tskIDLE_PRIORITY + 1UL )
 #define PSRAM __attribute__((section (".psram")))
@@ -110,6 +111,8 @@ static static_vector<ModbusTcpAddr, MAX_INVERTERS> is {.storage = {
 	ModbusTcpAddr{.ip = LWIP_MAKEU32(192,168,178,113), .port = 502, .modbus_id = 1},
 	ModbusTcpAddr{.ip = LWIP_MAKEU32(192,168,178,181), .port = 502, .modbus_id = 1}}, 
 	.cur_size = 2};
+
+static ModbusTcpAddr meter_addr{.ip = LWIP_MAKEU32(192,168,178,181), .port = 502, .modbus_id = 2};
 
 static PowerInfo meter_power {.device_id = METER_ID, .imp_w = 1000, .exp_w = 0};
 static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 2700, .exp_w = 0};
@@ -257,10 +260,18 @@ void modbus_task(void *) {
 		}
 		LogInfo("Next iteration");
 		uint32_t start_ms = time_ms();
+		meter().initiate_discover(meter_addr);
 		inverters().initiate_discover_inverters(&is);
+
+		meter().initiate_retrieve_infos();
 		inverters().initiate_retrieve_infos_all();
-		inverters().wait_all(1000);
-		vTaskDelay(pdMS_TO_TICKS(std::max(1000 - int(time_ms() - start_ms), 0)));
+
+		meter().wait_requests(1000);
+		int remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
+		inverters().wait_all(remaining_time);
+
+		remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
+		vTaskDelay(pdMS_TO_TICKS(remaining_time));
 	}
 
 }
@@ -344,7 +355,6 @@ int main( void )
 	set_sys_clock_khz(CPU_CLOCK_MHZ * 1000, true);
 	stdio_init_all();
 	setup_psram();
-
 
 	LogInfo("Starting FreeRTOS on all cores.");
 	std::cout << "Starting FreeRTOS on all cores\n";

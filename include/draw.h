@@ -130,6 +130,13 @@ struct settings;
 struct runtime_state;
 struct SettingsPage {
 	float base_offset{480};
+
+	IpButton ip1_m{.button = {{90, 30, 20, 15}, "..."}};
+	IpButton ip2_m{.button = {{115, 30, 20, 15}, "..."}};
+	IpButton ip3_m{.button = {{140, 30, 20, 15}, "..."}};
+	IpButton ip4_m{.button = {{165, 30, 20, 15}, "..."}};
+	IpButton port_m{.button = {{190, 30, 20, 15}, "...."}};
+	IpButton addr_m{.button = {{215, 30, 20, 15}, "..."}};
 	
 	IpButton ip1{.button = {{10, 180, 20, 15}, "...", ButtonStyle::BORDER}};
 	IpButton ip2{.button = {{35, 180, 20, 15}, "..."}};
@@ -137,9 +144,10 @@ struct SettingsPage {
 	IpButton ip4{.button = {{85, 180, 20, 15}, "..."}};
 	IpButton port{.button = {{110, 180, 20, 15}, "...."}};
 	IpButton addr{.button = {{135, 180, 20, 15}, "..."}};
-	std::array<IpButton*, 6> ip_buttons{&ip1, &ip2, &ip3, &ip4, &port, &addr};
+	std::array<IpButton*, 12> ip_buttons{&ip1_m, &ip2_m, &ip3_m, &ip4_m, &port_m, &addr_m, 
+						&ip1, &ip2, &ip3, &ip4, &port, &addr};
 	IpButton *selected_ip{&ip1};
-	Button configure_button{{170, 180, 60, 15}, "Hinzufügen"};
+	Button configure_button{{170, 180, 60, 15}, "Verbinden"};
 
 	Button i1{{10, 210, 15, 15}, "1"};
 	Button i2{{30, 210, 15, 15}, "2"};

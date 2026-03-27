@@ -2,13 +2,11 @@
 
 #include "emm_structs.h"
 
-constexpr std::string_view NOT_CONNECTED{"Nicht verbunden"};
-constexpr std::string_view CONNECTING{"Verbinde..."};
 // represents sunspec meter
 // has internally (in compile unit) an additional storage space for full modbus registers to read from meter
 struct meter_info {
     ModbusTcpAddr addr;
-    static_string<32> name; // check for equality with NOT_CONNECTED and CONNECTING to get the current status
+    static_string<32> name{NOT_CONNECTED}; // check for equality with NOT_CONNECTED and CONNECTING to get the current status
     PowerInfo power_info; // used for external processing
   
     void initiate_discover(ModbusTcpAddr address);
