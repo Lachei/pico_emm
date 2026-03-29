@@ -20,6 +20,7 @@
 #define ASSERT_BREAK_CONTEXT(cond, message) if (!(cond)) {LogError(message); context.state = pcb_state::IDLE; context.request_close = true; break;}
 
 using namespace libmodbus_static;
+using namespace g;
 constexpr uint32_t time_ms() { return time_us_64() / 1000; }
 constexpr uint32_t time_s() { return time_us_64() / 1000000; }
 

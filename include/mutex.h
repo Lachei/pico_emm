@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FreeRTOS.h"
 #include "semphr.h"
 
 #include "log_storage.h"

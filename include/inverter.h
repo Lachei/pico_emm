@@ -23,8 +23,10 @@ struct inverter_infos {
     void wait_all(uint32_t timeout_ms);
 };
 
+namespace g {
 inline inverter_infos& inverters() {
     static inverter_infos i{};
     return i;
+}
 }
 

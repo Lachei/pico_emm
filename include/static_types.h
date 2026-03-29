@@ -64,8 +64,8 @@ struct static_vector {
 	using value_type = T;
 	std::array<T, N> storage{};
 	int cur_size{};
-	constexpr T& operator[](int i) { return storage[std::min(i, N)]; }
-	constexpr const T& operator[](int i) const { return storage[std::min(i, N)]; }
+	constexpr T& operator[](int i) { if (i >= 0) return storage[std::min(i, N - 1)]; return storage[std::max(cur_size + i, 0)]; }
+	constexpr const T& operator[](int i) const { if (i >= 0) return storage[std::min(i, N - 1)]; return storage[std::max(cur_size + i, 0)]; }
 	constexpr T* begin() { return storage.begin(); }
 	constexpr T* end() { return storage.begin() + cur_size; }
 	constexpr const T* begin() const { return storage.begin(); }
@@ -117,6 +117,7 @@ struct static_ring_buffer {
 		bool operator!=(const iterator &o) const { return !(*this == o); }
 		auto& operator*() const { return _p.storage[_cur]; }
 	};
+	T& operator[](int i) { if (i >= 0) return storage[(cur_start + i) % N]; return storage[(cur_write + i + N) % N]; }
 };
 
 template<int N, typename... Args>

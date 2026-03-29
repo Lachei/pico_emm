@@ -35,6 +35,7 @@
 #include "psram.h"
 #include "inverter.h"
 #include "meter.h"
+#include "history_data.h"
 
 #define TEST_TASK_PRIORITY ( tskIDLE_PRIORITY + 1UL )
 
@@ -251,7 +252,7 @@ void touchscreen_task(void *) {
 	}
 }
 void modbus_task(void *) {
-	LogInfo("Modbus thread started");
+	LogInfo("Modbus/control/history thread started");
 	for (;;) {
 		if (!wifi_storage::Default().wifi_connected) {
 			vTaskDelay(pdMS_TO_TICKS(1000));
@@ -259,15 +260,46 @@ void modbus_task(void *) {
 		}
 		LogInfo("Next iteration");
 		uint32_t start_ms = time_ms();
-		meter().initiate_discover(meter_addr);
-		inverters().initiate_discover_inverters(&is);
+		time_t epoch_s = ntp_client::Default().synched() ? ntp_client::Default().get_time_since_epoch(): 0;
+		g::meter().initiate_discover(meter_addr);
+		g::inverters().initiate_discover_inverters(&is);
 
-		meter().initiate_retrieve_infos();
-		inverters().initiate_retrieve_infos_all();
+		g::meter().initiate_retrieve_infos();
+		g::inverters().initiate_retrieve_infos_all();
 
-		meter().wait_requests(1000);
+		g::meter().wait_requests(1000);
 		int remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
-		inverters().wait_all(remaining_time);
+		g::inverters().wait_all(remaining_time);
+
+		// history data update
+		if (epoch_s) {
+			hd::write_meter_data(g::meter().power_info.imp_w - g::meter().power_info.exp_w, epoch_s);
+			for (const InverterGroup &ig: g::inverters().read_power) {
+				hd::write_inverter_data(ig.inverter.device_id, ig.inverter.imp_w - ig.inverter.exp_w, epoch_s);
+				if (ig.pv.device_id > 0)
+					hd::write_inverter_data(ig.pv.device_id, ig.pv.imp_w - ig.pv.exp_w, epoch_s);
+				if (ig.battery.device_id > 0) {
+					hd::write_inverter_data(ig.battery.device_id, ig.battery.imp_w - ig.battery.exp_w, epoch_s);
+					int i = &ig - g::inverters().read_power.begin();
+					hd::write_inverter_data(ig.battery.device_id, g::inverters().control_infos[i].soc, epoch_s);
+				}
+			}
+		}
+		// remove stale histories
+		{	// stale inverter data
+			t::locked_data<std::array<t::id_data, MAX_INVERTERS * 2>> locked_data = g::inverter_data.access();
+			for (t::id_data &d: locked_data.data)
+				if (d.device_id != -1 &&  // reset history data for disconnected devices
+					!(g::inverters().read_power | find{[&d](const InverterGroup &g){ return g.inverter.device_id == d.device_id || g.pv.device_id == d.device_id || g.battery.device_id == d.device_id; }}))
+					d.device_id = -1;
+		}
+		{	// stale soc data
+			t::locked_data<std::array<t::id_data, MAX_INVERTERS>> locked_data = g::soc_data.access();
+			for (t::id_data &d: locked_data.data)
+				if (d.device_id != -1 && 
+					!(g::inverters().read_power | find{[&d](const InverterGroup &g){ return g.battery.device_id == d.device_id; }}))
+					d.device_id = -1;
+		}
 
 		remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
 		vTaskDelay(pdMS_TO_TICKS(remaining_time));
@@ -333,6 +365,9 @@ void startup_task(void *) {
 	settings::Default().sanitize();
 	wifi_storage::Default().update_hostname();
 	Webserver().start();
+	g::meter();
+	g::inverters();
+	history_data::init();
 	LogInfo("Ready, running http at {}", ip4addr_ntoa(netif_ip4_addr(netif_list)));
 	LogInfo("Initialization done");
 	std::cout << "Initialization done, get all further info via the commands shown in 'help'\n";

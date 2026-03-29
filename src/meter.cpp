@@ -14,6 +14,7 @@
 #include <lwip/tcp.h>
 
 using namespace libmodbus_static;
+using namespace g;
 
 #define ASSERT_OK_RETURN(status) {std::string_view s = status; if ((s) != OK) {LogError(s); return;}}
 

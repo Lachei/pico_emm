@@ -30,6 +30,7 @@ struct ntp_client {
 	time_t ntp_time{};
 	time_t local_time{};
 
+	bool synched() const { return ntp_time; }
 	void update_time();
 	time_t get_time_since_epoch();
 	void set_time_since_epoch(time_t t);
