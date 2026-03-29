@@ -29,6 +29,8 @@
 
 #pragma once
 
+#define PSRAM __attribute__((section (".psram")))
+
 extern size_t ps_size;
 extern size_t ps_heap_size;
 
