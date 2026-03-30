@@ -18,11 +18,11 @@ struct PowerInfo {
 
 struct InverterGroup {
 	PowerInfo inverter, pv, battery;
+	float bat_soc;
 };
 
 struct ControlPowerInfo {
 	float min_soc;		// min soc of the battery
-	float soc;		// soc of the battery
 	float power_max;	// maximum
 	float power_max_cha;	// maximum battery charge
 	float power_max_discha;	// maximum battery discharge
@@ -32,11 +32,11 @@ struct ControlPowerInfo {
 };
 
 constexpr inline float max_exp_pow_avail(const InverterGroup &ig, const ControlPowerInfo &pi) {
-	float bat_avail = pi.soc > pi.min_soc ? pi.power_max_discha: 0;
+	float bat_avail = ig.bat_soc > pi.min_soc ? pi.power_max_discha: 0;
 	return std::min(ig.pv.exp_w + bat_avail, pi.power_max);
 }
 constexpr inline float max_imp_pow_avail(const InverterGroup &ig, const ControlPowerInfo &pi) {
-	return pi.soc >= 100 ? 0: std::max(.0f, pi.power_max_cha - ig.pv.exp_w);
+	return ig.bat_soc >= 100 ? 0: std::max(.0f, pi.power_max_cha - ig.pv.exp_w);
 }
 
 constexpr int HOME_ID = 0;

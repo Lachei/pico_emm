@@ -532,7 +532,7 @@ static void parse_modbus_frame(context_t &context, struct pbuf *&p) {
 		}
 	} else if (context.last_modbus_addr == context.storage_addr) {
 		const model_storage *storage = context.modbus.storage.get_addr_as<model_storage>(context.storage_addr);
-		inverters().control_infos[i].soc = to_float(modbus_swap(storage->ChaState), modbus_swap_i16(storage->ChaState_SF));
+		inverters().read_power[i].bat_soc = to_float(modbus_swap(storage->ChaState), modbus_swap_i16(storage->ChaState_SF));
 		inverters().control_infos[i].power_max_cha = to_float(modbus_swap(storage->WChaMax), modbus_swap_i16(storage->WChaMax_SF));
 		inverters().control_infos[i].power_max_discha = inverters().control_infos[i].power_max_cha;
 	}

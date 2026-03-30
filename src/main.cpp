@@ -280,8 +280,7 @@ void modbus_task(void *) {
 					hd::write_inverter_data(ig.pv.device_id, ig.pv.imp_w - ig.pv.exp_w, epoch_s);
 				if (ig.battery.device_id > 0) {
 					hd::write_inverter_data(ig.battery.device_id, ig.battery.imp_w - ig.battery.exp_w, epoch_s);
-					int i = &ig - g::inverters().read_power.begin();
-					hd::write_inverter_data(ig.battery.device_id, g::inverters().control_infos[i].soc, epoch_s);
+					hd::write_soc_data(ig.battery.device_id, ig.bat_soc, epoch_s);
 				}
 			}
 		}
