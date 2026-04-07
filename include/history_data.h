@@ -32,6 +32,7 @@ struct id_data {
 	int device_id;
 	t::device_data data;
 };
+
 }
 
 namespace g {
@@ -41,10 +42,12 @@ namespace g {
  * to accesss the data (both reading or writing) simply choose your field and do eg.
  * int16_t value = meter_data.access().data.daily[-1][-1]; // this is essentially the last written value
  */
+// storage
 inline t::device_data meter_data_psram PSRAM;
 inline std::array<t::id_data, MAX_INVERTERS * 2> inverter_data_psram PSRAM;
 inline std::array<t::id_data, MAX_INVERTERS> soc_data_psram PSRAM;
 inline static_vector<t::device_data, 4> any_data_psram PSRAM;
+// access
 inline t::thread_safe<t::device_data> meter_data{meter_data_psram};
 inline t::thread_safe<std::array<t::id_data, MAX_INVERTERS * 2>> inverter_data{inverter_data_psram};
 inline t::thread_safe<std::array<t::id_data, MAX_INVERTERS>> soc_data{soc_data_psram};

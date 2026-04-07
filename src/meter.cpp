@@ -182,8 +182,8 @@ static void advance_context_state(t::context &context, struct pbuf *p) {
 				parse_modbus_frame(context, p);
 			// parsing modbus infos back to power info
 			float w = context.modbus.read(&meter_registers::W);
-			meter().power_info.imp_w = std::min(w, .0f);
-			meter().power_info.exp_w = std::max(w, .0f);
+			meter().power_info.imp_w = std::max(w, .0f);
+			meter().power_info.exp_w = -std::min(w, .0f);
 			LogInfo("Meter back to idle at: {}ms, {}W", time_ms(), w);
 			context.state = e::state::IDLE;
 			break;

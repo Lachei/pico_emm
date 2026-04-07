@@ -522,8 +522,8 @@ static void parse_modbus_frame(context_t &context, struct pbuf *&p) {
 		inverters().read_power[i].pv.exp_w = 0;
 		int pv_count = mppt_count - bat_count;
 		int16_t pf = modbus_swap_i16(mppt->DCW_SF);
-		for (int i: range(pv_count))
-			inverters().read_power[i].pv.exp_w += to_float(modbus_swap(mppts[i].module_DCW), pf);
+		for (int j: range(pv_count))
+			inverters().read_power[i].pv.exp_w += to_float(modbus_swap(mppts[j].module_DCW), pf);
 		if (bat_count > 0) {
 			// charging
 			inverters().read_power[i].battery.imp_w = to_float(modbus_swap(mppts[mppt_count - 2].module_DCW), pf);

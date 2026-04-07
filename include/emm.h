@@ -11,7 +11,7 @@ struct EMM {
 	static_vecctor<InverterPower, 32> inverter_target_power{};
 
 	// integrate a new smart meter value into the power_home
-	void update_power(const PowerInfo &smart_meter_power, std::span<InverterGroup> inverter_powers, std::span<ControlPowerInfo> inverter_control_values, uint32_t delta_ms);
+	void update_power(const PowerInfo &smart_meter_power, const PowerInfo &home_power, std::span<InverterGroup> inverter_powers, std::span<ControlPowerInfo> inverter_control_values, uint32_t delta_ms);
 };
 
 inline EMM& emm() {

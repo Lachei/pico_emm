@@ -46,13 +46,12 @@ inline std::ostream& operator<<(std::ostream &os, const settings &s) {
 	const auto ip_to_stream = [](std::ostream &os, const ModbusTcpAddr &a) {
 		os << (a.ip >> 24) << '.' << ((a.ip >> 16) & 0xff) << '.' << ((a.ip >> 8) & 0xff) << '.' << (a.ip & 0xff) << ':' << a.port << '|' << (int)a.modbus_id;
 	};
-	os << "configured_inverters: ";
+	os << "configured_inverters [" << s.configured_inverters.size() << "]:\n";
 	for (int i: range(s.configured_inverters.size())) {
-		if (i != 0)
-			os << "\n                      ";
+		os << "  ";
 		ip_to_stream(os, s.configured_inverters[i]);
+		os << '\n';
 	}
-	os << '\n';
 	os << "configured_meter: ";
 	ip_to_stream(os, s.configured_meter);
 	return os << '\n';

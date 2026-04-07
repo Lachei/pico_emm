@@ -7,6 +7,8 @@
 #include "measurements.h"
 #include "wifi_storage.h"
 #include "access_point.h"
+#include "inverter.h"
+#include "meter.h"
 
 // handle exactly one command from the input stream at a time (should be called in an endless loop)
 static constexpr inline void handle_usb_command(std::istream &in = std::cin, std::ostream &out = std::cout) {
@@ -55,14 +57,21 @@ static constexpr inline void handle_usb_command(std::istream &in = std::cin, std
 		out << "  s\n";
 		out << "    Print a separator line with dashes\n\n";
 	} else if (command == "status") {
+		out << "-------------\n";
 		out << "measurements:\n";
-		out << "-------------\n";
 		out << measurements::Default();
+		out << "-------------\n";
 		out << "settings:\n";
-		out << "-------------\n";
 		out << settings::Default();
-		out << "wifi:\n";
 		out << "-------------\n";
+		out << "Realtime data:\n";
+		out << "Meter " << g::meter().name.sv() << ": " << g::meter().power_info.imp_w - g::meter().power_info.exp_w << "W\n";
+		for (int i: range(g::inverters().read_power.size())) {
+			const InverterGroup &ig = g::inverters().read_power[i];
+			out << g::inverters().connected_names[i].sv() << ": Inverter(" << -ig.inverter.imp_w + ig.inverter.exp_w << "), PV(" << ig.pv.exp_w << "), Battery(" << -ig.battery.imp_w + ig.battery.exp_w << ", Soc " << ig.bat_soc << ")\n";
+		}
+		out << "-------------\n";
+		out << "wifi:\n";
 		out << wifi_storage::Default();
 		out << "Access point active: " << (access_point::Default().active ? "true": "false") << '\n';
 	} else if (command == "set") {

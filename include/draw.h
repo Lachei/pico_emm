@@ -69,7 +69,7 @@ struct EnergyInfo {
 	float imp_ws;
 	float exp_ws;
 };
-enum struct SelectedHistory {DAY = 0, MONTH, YEAR, COUNT};
+enum struct SelectedHistory {SECOND = 0, MINUTE, HOUR, COUNT};
 struct OverviewPage {
 	float base_offset{};
 	float target_y_offset{};
@@ -81,6 +81,8 @@ struct OverviewPage {
 	EnergyInfo meter_energy_info{.device_id = METER_ID};
 	static_vector<EnergyInfo, 32> energy_infos{};
 	static_vector<EnergyBlobInfo, 128> energy_blobs{};
+	double tot_imp_wh{};
+	double tot_exp_wh{};
 
 	void draw(Draw &display, TimeInfo time_info, float x_offset, 
 	   std::span<InverterGroup> inverter_groups, PowerInfo home, PowerInfo meter);
@@ -106,19 +108,23 @@ struct CurveScale {
 };
 struct HistoryPage {
 	float base_offset{240};
+	float x_history_offseŧ{0};
 	HistoryPageType history_page{DAILY};
 	VisType vis_type{POWER_PER_COMPONENT};
 	static_vector<CurveScale, 12> curve_scales{};
 	CurveInfo derived_curve{}; // used eg. for net import/export
 
-	SelectedHistory selected_history{SelectedHistory::DAY};
-	Button day_button{{20, 30, 40, 15}, "Tag", ButtonStyle::BORDER};
-	Button month_button{{65, 30, 40, 15}, "Monat"};
-	Button year_button{{110, 30, 40, 15}, "Jahr"};
-	std::array<Button*, 3> time_buttons{&day_button, &month_button, &year_button};
+	SelectedHistory selected_history{SelectedHistory::SECOND};
+	Button second_button{{10, 30, 50, 15}, "Sekündlich", ButtonStyle::BORDER};
+	Button minute_button{{65, 30, 50, 15}, "Minütlich"};
+	Button hour_button{{120, 30, 50, 15}, "Stündlich"};
+	std::array<Button*, 3> time_buttons{&second_button, &minute_button, &hour_button};
 	Button net_power_button{{190, 30, 30, 15}, "Net W"};
 
-	void draw(Draw &display, TimeInfo time_info, float x_offset, std::span<CurveInfo> curve_infos);
+	bool drag_history_view{};
+
+	// data is directly accessed by history data singletons
+	void draw(Draw &display, TimeInfo time_info, float x_offset);
 	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
 };
 

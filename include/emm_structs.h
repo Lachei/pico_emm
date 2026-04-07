@@ -3,9 +3,9 @@
 #include "static_types.h"
 
 struct ModbusTcpAddr {
-    uint32_t ip;
-    uint16_t port;
-    uint8_t modbus_id;
+    uint32_t ip{};
+    uint16_t port{};
+    uint8_t modbus_id{};
 
     bool operator<=>(const ModbusTcpAddr &o) const = default;
 };

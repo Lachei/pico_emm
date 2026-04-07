@@ -25,9 +25,9 @@ void write_meter_data(float value, time_t epoch_time_s) {
 }
 void write_inverter_data(int id, float value, time_t epoch_time_s) {
 	t::locked_data<std::array<t::id_data, MAX_INVERTERS * 2>> locked_data = g::inverter_data.access();
-	t::id_data *inverter = locked_data.data | find{[id](const t::id_data &i){ return i.device_id == id; }};
+	t::id_data *inverter = locked_data.data | find{&t::id_data::device_id, id};
 	if (!inverter) {
-		inverter = locked_data.data | find{[](const t::id_data &i) { return i.device_id == -1; }};
+		inverter = locked_data.data | find{&t::id_data::device_id, -1};
 		if (!inverter) // everything full
 			return;
 		inverter->device_id = id;
@@ -37,9 +37,9 @@ void write_inverter_data(int id, float value, time_t epoch_time_s) {
 }
 void write_soc_data(int id, float value, time_t epoch_time_s) {
 	t::locked_data<std::array<t::id_data, MAX_INVERTERS>> locked_data = g::soc_data.access();
-	t::id_data *soc = locked_data.data | find{[id](const t::id_data &i){ return i.device_id == id; }};
+	t::id_data *soc = locked_data.data | find{&t::id_data::device_id, id};
 	if (!soc) {
-		soc = locked_data.data | find{[](const t::id_data &i) { return i.device_id == -1; }};
+		soc = locked_data.data | find{&t::id_data::device_id, -1};
 		if (!soc) // everything full
 			return;
 		soc->device_id = id;
@@ -57,9 +57,10 @@ void write_any_data(int i, float value, time_t epoch_time_s) {
 // -------------------------------------------------------------------------------------------
 
 static void add_data(t::device_data &locked_data, float value, time_t epoch_time_s) {
+	bool has_data = locked_data.per_second.size();
 	uint32_t prev_minute = locked_data.per_second[-1].time / 60;
 	std::optional<t::data_time> new_per_minute{};
-	if (prev_minute != epoch_time_s / 60) { // new minute started
+	if (has_data &&prev_minute != epoch_time_s / 60) { // new minute started
 		// calculate minute average of previous minute
 		float sum{};
 		int n{};
@@ -75,7 +76,7 @@ static void add_data(t::device_data &locked_data, float value, time_t epoch_time
 
 	uint32_t prev_hour = locked_data.per_minute[-1].time / 3600;
 	std::optional<t::data_time> new_per_hour{};
-	if (prev_hour != epoch_time_s / 3600) {
+	if (has_data && prev_hour != epoch_time_s / 3600) {
 		float sum{};
 		int n{};
 		for (int i: range(60)) {

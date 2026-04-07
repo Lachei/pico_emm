@@ -89,54 +89,10 @@ static Touchscreen& touchscreen() {
 
 static std::atomic<float> page_offset;
 
-static std::array<InverterGroup, 3> test_groups{
-	InverterGroup {
-		.inverter = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
-		.pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1100},
-		.battery = {.device_id = get_next_device_id(), .imp_w = 100, .exp_w = 0}
-	},
-	InverterGroup {
-		.inverter = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
-		.pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1600},
-		.battery = {.device_id = get_next_device_id(), .imp_w = 600, .exp_w = 0}
-	},
-	InverterGroup {
-		.inverter = {.device_id = get_next_device_id(), .imp_w = 1000, .exp_w = 0},
-		.pv = {.device_id = get_next_device_id(), .imp_w = 0, .exp_w = 1000},
-		.battery = {.device_id = get_next_device_id(), .imp_w = 2000, .exp_w = 0}
-	},
-};
-
-static static_vector<ModbusTcpAddr, MAX_INVERTERS> is {.storage = {
-	ModbusTcpAddr{.ip = LWIP_MAKEU32(192,168,178,113), .port = 502, .modbus_id = 1},
-	ModbusTcpAddr{.ip = LWIP_MAKEU32(192,168,178,181), .port = 502, .modbus_id = 1}}, 
-	.cur_size = 2};
-
-static ModbusTcpAddr meter_addr{.ip = LWIP_MAKEU32(192,168,178,181), .port = 502, .modbus_id = 2};
-
 static PowerInfo meter_power {.device_id = METER_ID, .imp_w = 1000, .exp_w = 0};
 static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 2700, .exp_w = 0};
-
-static std::array<CurveInfo, 2> test_curves { 
-	CurveInfo {
-		.name = "Erzeugung",
-		.unit_name = "W",
-		.time_start = "gestern",
-		.time_end = "heute",
-		.color = RGB{200, 200, 0}.to_rgb565(),
-		.max_val = 10'000,
-		.data = {}
-	},
-	CurveInfo {
-		.name = "Verbrauch",
-		.unit_name = "W",
-		.time_start = "gestern",
-		.time_end = "heute",
-		.color = RGB{50, 50, 200}.to_rgb565(),
-		.max_val = 10'000,
-		.data = {}
-	},
-};
+static double tot_imp_wh{};
+static double tot_exp_wh{};
 
 std::array<std::string_view, 4> texts{"Hello darkness", "my old friend,", "shall peace and glory", "thy remove"};
 void display_task(void *) {
@@ -146,17 +102,6 @@ void display_task(void *) {
 	screen().init();
 	draw_ctx().draw.set_font("bitmap8");
 	wifi_page().init(false);
-
-	test_curves[0].data.resize(512);
-	test_curves[1].data.resize(512);
-	for (int16_t &i: test_curves[0].data){
-		int idx = &i - test_curves[0].data.begin();
-		i = std::max(-std::cos(idx / 512. * 2 * std::numbers::pi), 0.) * 10'000;
-	}
-	for (int16_t &i: test_curves[1].data){
-		int idx = &i - test_curves[1].data.begin();
-		i = std::pow(std::sin(idx / 512. * 2 * std::numbers::pi), 2.) * 10'000;
-	}
 
 	LogInfo("Psram size: {}", ps_size);
 	uint32_t last_ms = time_ms();
@@ -202,8 +147,16 @@ void display_task(void *) {
 		// draw_ctx().draw.text(texts[ms / 3000 % texts.size()], {30 + x_off, 30 + y_off}, 240);
 		draw_ctx().draw.set_pen(0);
 		draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
-		overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_groups, home_power, meter_power);
-		history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, test_curves);
+		float int_power{};
+		for (const InverterGroup &pi: g::inverters().read_power)
+			int_power += pi.inverter.exp_w - pi.inverter.imp_w;
+		int_power += -g::meter().power_info.exp_w + g::meter().power_info.imp_w;
+		tot_imp_wh += g::meter().power_info.imp_w * delta_ms / 1000 / 60 / 60;
+		tot_exp_wh += g::meter().power_info.exp_w * delta_ms / 1000 / 60 / 60;
+		home_power.imp_w = std::max(int_power, 0.f);
+		home_power.exp_w = -std::min(int_power, 0.f);
+		overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, g::inverters().read_power.to_span(), home_power, g::meter().power_info);
+		history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset);
 		settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default(), runtime_state::Default());
 		wifi_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, wifi_storage::Default());
 		screen().set_framebuffer(draw_ctx().frame_buffer());
@@ -261,8 +214,9 @@ void modbus_task(void *) {
 		LogInfo("Next iteration");
 		uint32_t start_ms = time_ms();
 		time_t epoch_s = ntp_client::Default().synched() ? ntp_client::Default().get_time_since_epoch(): 0;
-		g::meter().initiate_discover(meter_addr);
-		g::inverters().initiate_discover_inverters(&is);
+		if (settings::Default().configured_meter != ModbusTcpAddr{})
+			g::meter().initiate_discover(settings::Default().configured_meter);
+		g::inverters().initiate_discover_inverters(&settings::Default().configured_inverters);
 
 		g::meter().initiate_retrieve_infos();
 		g::inverters().initiate_retrieve_infos_all();
@@ -360,6 +314,7 @@ void startup_task(void *) {
 		}
 	}
 	cyw43_arch_enable_sta_mode();
+	cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);
 	persistent_storage_t::Default().read(&persistent_storage_layout::persistent_settings, settings::Default());
 	settings::Default().sanitize();
 	wifi_storage::Default().update_hostname();
@@ -374,7 +329,7 @@ void startup_task(void *) {
 	cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
 	xTaskCreate(usb_comm_task, "usb_comm", 512, NULL, 1, NULL);
 	xTaskCreate(wifi_search_task, "UpdateWifiThread", 512, NULL, 1, NULL);
-	xTaskCreate(display_task, "DisplayThread", 512, NULL, 1, NULL);
+	xTaskCreate(display_task, "DisplayThread", 1024, NULL, 1, NULL);
 	xTaskCreate(touchscreen_task, "TouchscreenThread", 512, NULL, 1, NULL);
 	xTaskCreate(modbus_task, "ModbusThread", 512, NULL, 1, NULL);
 	cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);

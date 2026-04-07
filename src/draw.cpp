@@ -5,6 +5,7 @@
 #include "ntp_client.h"
 #include "settings.h"
 #include "wifi_storage.h"
+#include "history_data.h"
 
 #define RECTE(x, y, width, height, e) Line{{x,y}, {x + width, y}}, \
 				  Line{{x + width,y}, {x + width, y + height + e}}, \
@@ -18,8 +19,10 @@
 // mainly made because the pico_vector circle was tiling when clipping was set
 constexpr void draw_hq_circle(Draw &draw, Point center, int height) {
 	draw.circle(center, height / 2); // core
+	if (height <= 2)
+		return;
 	// shade
-	height += 2;
+	height += height > 4 ? 2: 1;
 	Point prev_b{};
 	for (float i = 0; i < 2 * std::numbers::pi; i += std::numbers::pi / height / 2) {
 		float x = std::sin(i) * height / 2 + center.x;
@@ -99,12 +102,14 @@ void draw_pv(Draw &draw, Point center, int height, DrawSettings draw_settings) {
 	};
 	draw_lines(draw, center, height, draw_settings, lines);
 }
-void draw_battery(Draw &draw, Point center, int height, DrawSettings draw_settings) {
+void draw_battery(Draw &draw, Point center, int height, float soc, DrawSettings draw_settings) {
 	static std::array<Line, 5> lines{
 		RECT(-15,  -30, 30, 60),
 		Line{{-10, -40}, {10, -40}}
 	};
 	draw_lines(draw, center, height, draw_settings, lines);
+	float m = height * .01;
+	draw.rectangle(Rect{int(center.x - 5 * m), int(center.y - (22 - 56 * (100 - soc) / 100) * m), int(18 * m), int(54 * soc / 100 * m) });
 }
 
 bool Button::operator()(Draw &draw, int x_offset) {
@@ -191,6 +196,8 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	float ds = time_info.delta_ms / 1000.f;
 
 
+	tot_imp_wh += meter.imp_w * ds / 60 / 60;
+	tot_exp_wh += meter.exp_w * ds / 60 / 60;
 	home_energy_info.imp_ws += home.imp_w * ds;
 	home_energy_info.exp_ws += home.exp_w * ds;
 	meter_energy_info.imp_ws += meter.exp_w * ds; // is swapped on purpose
@@ -238,7 +245,7 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	const auto integrate_power = [&] (const PowerInfo &pi, bool is_inverter = false) -> EnergyInfo* {
 		if (pi.device_id == -1)
 			return {};
-		EnergyInfo *ei = energy_infos | find{[id = pi.device_id](EnergyInfo& ei) {return id == ei.device_id;}};
+		EnergyInfo *ei = energy_infos | find{&EnergyInfo::device_id, pi.device_id};
 		if (!ei) {
 			ei = energy_infos.push();
 			if (!ei) {
@@ -309,6 +316,8 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 			y_base_f -= IG_HEIGHT;
 		}
 	}
+	if (spawn_bubbles)
+		meter_energy_info.imp_ws = 0;
 
 	// advancing energy dots
 	constexpr float SPEED = .03; // in pixels per miliseconds
@@ -397,11 +406,11 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 					blob.x += x_mult * std::abs(blob.y - Y_BUS);
 					blob.y = Y_BUS;
 					blob.dir = blob.x < goal_x ? Direction::RIGHT: Direction::LEFT;
-				} else if (goal_x > X_INV_CONN && crossed(blob.y + y_offset, prev_y + y_offset, Y_BUS)) {
+				} else if (blob.end_device_id != GRID_ID && goal_x > X_INV_CONN && crossed(blob.y + y_offset, prev_y + y_offset, Y_BUS)) {
 					blob.x += std::abs(blob.y + y_offset - Y_BUS);
 					blob.y = Y_BUS;
 					blob.dir = Direction::RIGHT;
-				} else if ((blob.x != X_INV_CONN || goal_x <= X_INV_CONN) && crossed(blob.y, prev_y, goal_y)) {
+				} else if (blob.x != X_HOME_CONN && (blob.x != X_INV_CONN || goal_x <= X_INV_CONN) && crossed(blob.y, prev_y, goal_y)) {
 					int x_mult = blob.x < goal_x ? 1: -1;
 					blob.x += x_mult + std::abs(blob.y - goal_y);
 					blob.y = goal_y;
@@ -421,7 +430,7 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 				} else if (crossed(blob.x, prev_x, X_INV_CONN)) {
 					int y_mult = goal_y + y_offset > Y_BUS ? 1: -1;
 					blob.y = Y_BUS - y_offset + y_mult * std::abs(blob.x - X_INV_CONN);
-					blob.x = Y_BUS;
+					blob.x = X_INV_CONN;
 					blob.dir = blob.y < goal_y ? Direction::DOWN: Direction::UP;
 				} else if (blob.end_device_id != HOME_ID && crossed(blob.x, prev_x, goal_x)) {
 					int y_mult = blob.y < goal_y ? 1: -1;
@@ -437,11 +446,21 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 		if (energy_blobs[i].end_device_id == -1)
 			energy_blobs[i] = *energy_blobs.pop();
 
+	// resort points for smallest last (shall be drawn in the front)
+	if (spawn_bubbles)
+		std::sort(energy_blobs.begin(), energy_blobs.end(), [](const EnergyBlobInfo &a, const EnergyBlobInfo &b){ return a.energy > b.energy; });
+
 	int y_offset = static_cast<int>(this->y_offset);
 	int x_offset = static_cast<int>(x_off + base_offset);
 	if (x_offset >= 239 ||
 	    x_offset + 239 <= 0)
 		return;
+
+	// energy counts
+	std::string_view power = static_format<64>("Importzähler: {:.1f}Wh", tot_imp_wh);
+	draw.text(power.data(), {40 + x_offset, 40}, 80, 1);
+	power = static_format<64>("Exportzähler: {:.1f}Wh", tot_exp_wh);
+	draw.text(power.data(), {120 + x_offset, 40}, 80, 1);
 
 	// draw paths
 	draw.line({X_INV_CONN + x_offset, Y_BUS}, {X_METER + x_offset, Y_BUS});
@@ -497,8 +516,12 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
         Point meter_pos{X_METER + x_offset, Y_METER};
         Point home_pos{X_HOME + x_offset, Y_HOME};
         draw_home(draw, home_pos, ICON_HEIGHT, {.background_col = COL_HOME});
+	power = static_format<64>("{}W", int(home.imp_w + home.exp_w));
+	draw.text(power.data(), {home_pos.x - 10, home_pos.y + 21}, 40, 1);
         draw_electric_pole(draw, pole_pos, ICON_HEIGHT, {.col = 0xffff, .background_col = COL_POLE});
         draw_smart_meter(draw, meter_pos, ICON_HEIGHT, {.background_col = COL_METER});
+	power = static_format<64>("{}W", int(meter.imp_w + meter.exp_w));
+	draw.text(power.data(), {meter_pos.x - 40, meter_pos.y + 22}, 40, 1);
 	if (inverter_groups.size()) {
 		float y_base_f = Y_BUS + inverter_groups.size() * IG_HEIGHT / 2.;
 		draw.set_clip(IG_VIEW_BOX + Point{x_offset, 0});
@@ -506,10 +529,16 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 			int y_base = static_cast<int>(y_base_f);
 			Point p{X_PV + x_offset, y_base + Y_PV_OFF + y_offset};
 			draw_pv(draw, p, ICON_HEIGHT, {.background_col = COL_PV});
+			power = static_format<64>("{}W", int(ig.pv.imp_w + ig.pv.exp_w));
+			draw.text(power.data(), {p.x + 15, p.y - 9}, 40, 1);
 			p = {X_INVERTER + x_offset, y_base + Y_INVERTER_OFF + y_offset};
 			draw_inverter(draw, p, ICON_HEIGHT, {.background_col = COL_INVERTER});
+			power = static_format<64>("{}W", int(ig.inverter.imp_w + ig.inverter.exp_w));
+			draw.text(power.data(), {p.x + 2, p.y + 18}, 40, 1);
 			p = {X_BATTERY + x_offset, y_base + Y_BATTERY_OFF + y_offset};
-			draw_battery(draw, p, ICON_HEIGHT, {.background_col = COL_BATTERY});
+			draw_battery(draw, p, ICON_HEIGHT, ig.bat_soc, {.background_col = COL_BATTERY});
+			power = static_format<64>("{}W", int(ig.battery.imp_w + ig.battery.exp_w));
+			draw.text(power.data(), {p.x + 15, p.y + 4}, 40, 1);
 			y_base_f -= IG_HEIGHT;
 		}
 		draw.remove_clip();
@@ -532,142 +561,133 @@ bool OverviewPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
+
 struct MinMax { float min, max; };
 struct UnitInfo {std::string_view name; MinMax bounds;};
-struct GraphInfo {
-	MinMax x{};
-	static_vector<UnitInfo, 16> units{};
-};
 static const Rect PLOT_RECT{10, 60, 220, 170};
-void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off, std::span<CurveInfo> curve_infos) {
+template <int N>
+void draw_data(Draw &draw, const static_ring_buffer<t::data_time, N> &data, MinMax m, float x_offset, int x_page_offset) {
+	float d = m.max - m.min;
+	m.min -= d * .125;
+	m.max += d * .125;
+	d = m.max - m.min;
+	std::optional<float> prev{};
+	for (int i: range(data.size())) {
+		int j = x_offset - (i + 1);
+		if (j >=  0)
+			continue;
+		if (j < -PLOT_RECT.w)
+			break;
+		t::data_time cur = data[j];
+		if (prev) {
+			int x_start = -i + PLOT_RECT.w + PLOT_RECT.x;
+			int x_end = x_start - 1;
+			int y_start = int((1. - (*prev - m.min) / d) * PLOT_RECT.h + PLOT_RECT.y);
+			int y_end = int((1. - (cur.data - m.min) / d) * PLOT_RECT.h + PLOT_RECT.y);
+			draw.line({x_start + x_page_offset, y_start}, {x_end + x_page_offset, y_end});
+		}
+		prev = cur.data;
+	}
+};
+void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off) {
 	int x_offset = int(x_off + base_offset);
 	if (x_offset >= 239 ||
 	    x_offset + 239 <= 0)
 		return;
 
+	if (!drag_history_view)
+ 		x_history_offseŧ = .65 * x_history_offseŧ; // converges to 0
+
 	// the buttons are only the selectors. The data is set in the main loop according to this->selected_history
-	if (day_button(draw, x_offset)) {
-		selected_history = SelectedHistory::DAY;
+	if (second_button(draw, x_offset)) {
+		selected_history = SelectedHistory::SECOND;
 		for (Button *b: time_buttons)
 			b->style = ButtonStyle::DEFAULT;
-		day_button.style = ButtonStyle::BORDER;
+		second_button.style = ButtonStyle::BORDER;
 	}
-	if (month_button(draw, x_offset)) {
-		selected_history = SelectedHistory::MONTH;
+	if (minute_button(draw, x_offset)) {
+		selected_history = SelectedHistory::MINUTE;
 		for (Button *b: time_buttons)
 			b->style = ButtonStyle::DEFAULT;
-		month_button.style = ButtonStyle::BORDER;
+		minute_button.style = ButtonStyle::BORDER;
 	}
-	if (year_button(draw, x_offset)) {
-		selected_history = SelectedHistory::YEAR;
+	if (hour_button(draw, x_offset)) {
+		selected_history = SelectedHistory::HOUR;
 		for (Button *b: time_buttons)
 			b->style = ButtonStyle::DEFAULT;
-		year_button.style = ButtonStyle::BORDER;
+		hour_button.style = ButtonStyle::BORDER;
 	}
 	if (net_power_button(draw, x_offset)) {
 		net_power_button.style = net_power_button.is_selected() ? ButtonStyle::DEFAULT: ButtonStyle::BORDER;
 	}
 
-	// analyzing the graphs
-	static GraphInfo graph_info{};
-	// switch (selected_history) {
-	// 	case SelectedHistory::DAY: graph_info.x.min = 0; graph_info.x.max = 24;break;
-	// 	case SelectedHistory::MONTH: graph_info.x.min = ;break;
-	// 	case SelectedHistory::YEAR: ;break;
-	// }
-	graph_info.units.clear();
-	const auto get_or_insert_unit = [] (std::string_view name, GraphInfo &graph_info) -> UnitInfo* {
-		UnitInfo *y_unit = graph_info.units | find{[&](const UnitInfo &unit) { return unit.name == name;}};
-		if (!y_unit) {
-			if (!graph_info.units.push({.name = name}))
-				return nullptr;
-			y_unit = graph_info.units.back();
-		}
-		return y_unit;
-	};
-	for (CurveInfo &ci: curve_infos) {
-		UnitInfo *y_unit = get_or_insert_unit(ci.unit_name, graph_info);
-		if (!y_unit) {
-			LogError("Failed to get and create unit {}", ci.unit_name);
-			continue;
-		}
-		y_unit->bounds.min = std::min(ci.min_val, y_unit->bounds.min);
-		y_unit->bounds.max = std::max(ci.max_val, y_unit->bounds.max);
-	}
+	static MinMax pow_bounds{-10000, 10000};
+	MinMax cur_pow_bounds{-10000, 10000};
 
-	// checking for derived curve
-	if (net_power_button.is_selected()) {
-		CurveInfo *producing = curve_infos | find{[](const CurveInfo &ci){ return ci.name == "Erzeugung"; }};
-		CurveInfo *consuming = curve_infos | find{[](const CurveInfo &ci){ return ci.name == "Verbrauch"; }};
-		if (producing && consuming) {
-			int s = std::max(producing->data.size(), producing->data.size());
-			derived_curve.data.resize(s);
-			derived_curve.min_val = derived_curve.max_val = 0;
-			derived_curve.unit_name = "W";
-			for (int i: range(s)) {
-				int16_t prod = i < producing->data.size() ? producing->data[i]: 0;
-				int16_t con = i < consuming->data.size() ? consuming->data[i]: 0;
-				derived_curve.data[i] = prod - con;
-				derived_curve.min_val = std::min<float>(derived_curve.min_val, derived_curve.data[i]);
-				derived_curve.max_val = std::max<float>(derived_curve.max_val, derived_curve.data[i]);
-			}
-			UnitInfo *y_unit = get_or_insert_unit("W", graph_info);
-			if (y_unit) {
-				y_unit->bounds.min = std::min(y_unit->bounds.min, derived_curve.min_val);
-				y_unit->bounds.max = std::max(y_unit->bounds.max, derived_curve.max_val);
-			}
-			derived_curve.color = RGB{180, 180, 180}.to_rgb565();
-		} else 
-			LogError("Didnt find necessary curves");
-	}
-
-	// aligning 0 line for all min-max values: Get highest 0 line, adopt all max min vals to get the same 0 line
-	float zero_line = 0;
-	for (const UnitInfo &ui: graph_info.units)
-		zero_line = std::max(zero_line, (-ui.bounds.min) / (ui.bounds.max - ui.bounds.min));
-	for (UnitInfo &ui: graph_info.units)
-		ui.bounds.min = zero_line * ui.bounds.max / (zero_line - 1);
-	int zero_line_y = int((.8 * (1. - zero_line) + .1) * PLOT_RECT.h + PLOT_RECT.y);
-
-	// drawing graphs (always are drawn with common 0)
+	
+	// drawing outline
 	Point offset{x_offset, 0};
 	draw.set_pen(0);
 	for (const Line& l: {RECTE(PLOT_RECT.x, PLOT_RECT.y, PLOT_RECT.w, PLOT_RECT.h, 1)})
 		draw.line(l.start + offset, l.end + offset);
-	const auto draw_curve = [&](const CurveInfo &ci, GraphInfo &graph_info) {
-		UnitInfo *unit = get_or_insert_unit(ci.unit_name, graph_info);
-		if (!unit) {
-			LogError("Cant draw unit {}", ci.unit_name);
-			return;
+
+	{ // drawing curves
+		t::locked_data<t::device_data> meter = g::meter_data.access();
+		t::locked_data<std::array<t::id_data, MAX_INVERTERS * 2>> inverter = g::inverter_data.access();
+		t::locked_data<std::array<t::id_data, MAX_INVERTERS>> soc = g::soc_data.access();
+		uint8_t r{100}, g{200}, b{};
+		const auto draw_per_x = [&](auto member) {
+			draw.set_pen(COL_METER);
+			draw_data(draw, meter.data.*member, pow_bounds, x_history_offseŧ, x_offset);
+			for (const t::id_data &id_data: inverter.data) {
+				if (id_data.device_id < 0)
+					continue;
+				draw.set_pen(r, g, b);
+				draw_data(draw, id_data.data.*member, pow_bounds, x_history_offseŧ, x_offset);
+				r += 30; g += 56; b += 111;
+			}
+			for (const t::id_data &id_data: soc.data) {
+				if (id_data.device_id < 0)
+					continue;
+				draw.set_pen(r, g, b);
+				draw_data(draw, id_data.data.*member, pow_bounds, x_history_offseŧ, x_offset);
+				r += 30; g += 56; b += 111;
+			}
+		};
+		switch (selected_history) {
+			case SelectedHistory::SECOND:
+				draw_per_x(&t::device_data::per_second);
+				break;
+			case SelectedHistory::MINUTE:
+				draw_per_x(&t::device_data::per_minute);
+				break;
+			case SelectedHistory::HOUR:
+				draw_per_x(&t::device_data::per_hour);
+				break;
 		}
-		MinMax m = unit->bounds;
-		float d = m.max - m.min;
-		m.min -= d * .125;
-		m.max += d * .125;
-		d = m.max - m.min;
-		draw.set_pen(ci.color);
-		for (int i: range(ci.data.size() - 1)) {
-			int x_start = int((float(i) / (ci.data.size() - 1)) * PLOT_RECT.w + PLOT_RECT.x);
-			int x_end = int((float(i + 1) / (ci.data.size() - 1)) * PLOT_RECT.w + PLOT_RECT.x) + 1;
-			int y_start = int((1. - (ci.data[i] - m.min) / d) * PLOT_RECT.h + PLOT_RECT.y);
-			int y_end = int((1. - (ci.data[i + 1] - m.min) / d) * PLOT_RECT.h + PLOT_RECT.y);
-			draw.line({x_start + x_offset, y_start}, {x_end + x_offset, y_end});
-		}
-	};
-	for (CurveInfo &ci: curve_infos)
-		draw_curve(ci, graph_info);
-	if (net_power_button.is_selected())
-		draw_curve(derived_curve, graph_info);
-	draw.set_pen(RGB{180, 0, 0}.to_rgb565());
-	draw.line({PLOT_RECT.x + x_offset, zero_line_y}, {PLOT_RECT.x + PLOT_RECT.w + x_offset, zero_line_y});
+	}
+
+	pow_bounds = cur_pow_bounds;
 }
 bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
+	x_offset += base_offset;
+	if (touch_info.touch_ended() && drag_history_view) {
+		drag_history_view = false;
+		return true;
+	}
+	if (drag_history_view && touch_info.cur_touch && touch_info.last_touch) {
+		x_history_offseŧ += touch_info.cur_touch->x - touch_info.last_touch->x;
+		return true;
+	}
 	for (Button *b: time_buttons) {
-		if (b->handle_touch_input(touch_info, base_offset + x_offset))
+		if (b->handle_touch_input(touch_info, x_offset))
 			return true;
 	}
-	if (net_power_button.handle_touch_input(touch_info, base_offset + x_offset))
+	if (net_power_button.handle_touch_input(touch_info, x_offset))
 		return true;
+	Rect history_r = PLOT_RECT + Point{x_offset, 0};
+	if (touch_info.touch_started() && history_r.contains(*touch_info.cur_touch))
+		return drag_history_view = true;
 	return false;
 }
 
@@ -703,9 +723,9 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 	draw.text("Smart meter:", {10 + x_offset, 34}, 100, 1);
 	if (ip1_m.button.text == "..." && meter.ip != 0) {
 		ip1_m.str.fill_formatted("{}", meter.ip >> 24);
-		ip2_m.str.fill_formatted("{}", (meter.ip >> 16) & 0xf);
-		ip3_m.str.fill_formatted("{}", (meter.ip >> 8) & 0xf);
-		ip4_m.str.fill_formatted("{}", meter.ip & 0xf);
+		ip2_m.str.fill_formatted("{}", (meter.ip >> 16) & 0xff);
+		ip3_m.str.fill_formatted("{}", (meter.ip >> 8) & 0xff);
+		ip4_m.str.fill_formatted("{}", meter.ip & 0xff);
 		port_m.str.fill_formatted("{}", meter.port);
 		addr_m.str.fill_formatted("{}", (int)meter.modbus_id);
 		ip1_m.button.text = ip1_m.str.sv();
@@ -943,27 +963,31 @@ bool WifiPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	x_offset += base_offset;
 	if (touch_info.touch_ended()) {
 		target_y_offset = std::clamp(target_y_offset, std::min(-wifi_storage::Default().wifis.size() * 35.f + WIFI_RECT.h, .0f), .0f);
-		drag_wifi_view = false;
+		if (drag_wifi_view) {
+			drag_wifi_view = false;
+			return true; // avoid any button being pressed
+		}
+	}
+	if (drag_wifi_view && touch_info.cur_touch && touch_info.last_touch) {
+		target_y_offset += touch_info.cur_touch->y - touch_info.last_touch->y;
+		return true;
 	}
 	if (shift.handle_touch_input(touch_info, x_offset) ||
 		del.handle_touch_input(touch_info, x_offset) ||
 		show_pwd.handle_touch_input(touch_info, x_offset) ||
 		connect.handle_touch_input(touch_info, x_offset))
 		return true;
+	Rect wifi_r = WIFI_RECT + Point{x_offset, 0};
 	for (PwdButton &b: wifi_pwds)
-		if (b.button.handle_touch_input(touch_info, x_offset))
+		if (wifi_r.contains(touch_info.last_touch.value_or(Point{})) && b.button.handle_touch_input(touch_info, x_offset))
 			return true;
 	for (Button &b: keyboard_buttons)
 		if (b.handle_touch_input(touch_info, x_offset))
 			return true;
-	if (touch_info.touch_started() && (WIFI_RECT + Point{x_offset, 0}).contains(*touch_info.cur_touch)) {
-		drag_wifi_view = true;
-		return true;
-	}
-	if (drag_wifi_view && touch_info.cur_touch && touch_info.last_touch) {
-		target_y_offset += touch_info.cur_touch->y - touch_info.last_touch->y;
-		return true;
-	}
+	if (touch_info.cur_touch && touch_info.last_touch && 
+		wifi_r.contains(*touch_info.cur_touch) &&
+		std::abs(touch_info.cur_touch->y - touch_info.last_touch->y) > 3)
+		return drag_wifi_view = true;
 	return false;
 }
 

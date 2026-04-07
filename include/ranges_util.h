@@ -22,11 +22,16 @@ struct range_inv {
 	iterator end() const { return iterator{fin - 1}; }
 };
 
-template<typename T>
-struct find {T f;};
-template<typename S, typename T>
-S::value_type* operator|(S &l, find<T> r) {
-	if constexpr (std::is_same_v<T, typename S::value_type>) {
+struct Void{};
+template<typename T, typename V = Void>
+struct find {T f; V v{};};
+template<typename S, typename T, typename V = Void>
+S::value_type* operator|(S &l, find<T, V> r) {
+	if constexpr (!std::is_same_v<V, Void>) {
+		for (auto &e: l)
+			if (e.*(r.f) == r.v)
+				return &e;
+	} else if constexpr (std::is_same_v<T, typename S::value_type>) {
 		for(auto &e: l)
 			if(r.f == e)
 				return &e;

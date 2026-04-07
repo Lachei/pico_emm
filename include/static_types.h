@@ -3,6 +3,7 @@
 #include <array>
 #include <string_view>
 #include <format>
+#include <span>
 
 template<int N>
 struct static_string {
@@ -83,6 +84,7 @@ struct static_vector {
 	constexpr int resize(int s) { return cur_size = std::clamp(s, 0, N); }
 	constexpr void sanitize() { if (cur_size > N || cur_size < 0) cur_size = 0; }
 	constexpr int rev_start_idx() const { return cur_size - 1; }
+	constexpr std::span<T> to_span() { return {begin(), cur_size}; }
 };
 
 template<typename T, int N>
@@ -118,12 +120,14 @@ struct static_ring_buffer {
 		auto& operator*() const { return _p.storage[_cur]; }
 	};
 	T& operator[](int i) { if (i >= 0) return storage[(cur_start + i) % N]; return storage[(cur_write + i + N) % N]; }
+	const T& operator[](int i) const { if (i >= 0) return storage[(cur_start + i) % N]; return storage[(cur_write + i + N) % N]; }
 };
 
 template<int N, typename... Args>
 static std::string_view static_format(std::format_string<Args...> fmt, Args&&... args) {
 	static static_string<N> string{};
 	string.fill_formatted(fmt, std::forward<Args>(args)...);
+	string.make_c_str_safe();
 	return string.sv();
 }
 
