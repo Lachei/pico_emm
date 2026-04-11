@@ -60,7 +60,7 @@ static void add_data(t::device_data &locked_data, float value, time_t epoch_time
 	bool has_data = locked_data.per_second.size();
 	uint32_t prev_minute = locked_data.per_second[-1].time / 60;
 	std::optional<t::data_time> new_per_minute{};
-	if (has_data &&prev_minute != epoch_time_s / 60) { // new minute started
+	if (has_data && prev_minute != epoch_time_s / 60) { // new minute started
 		// calculate minute average of previous minute
 		float sum{};
 		int n{};
@@ -74,6 +74,7 @@ static void add_data(t::device_data &locked_data, float value, time_t epoch_time
 		new_per_minute = {sum / n, prev_minute * 60};
 	}
 
+	has_data = locked_data.per_minute.size();
 	uint32_t prev_hour = locked_data.per_minute[-1].time / 3600;
 	std::optional<t::data_time> new_per_hour{};
 	if (has_data && prev_hour != epoch_time_s / 3600) {
@@ -86,7 +87,7 @@ static void add_data(t::device_data &locked_data, float value, time_t epoch_time
 				n += 1;
 			}
 		}
-		new_per_hour = {sum / n, prev_hour};
+		new_per_hour = {sum / n, prev_hour * 3600};
 	}
 
 	locked_data.per_second.push({value, epoch_time_s});

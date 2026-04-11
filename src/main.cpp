@@ -37,6 +37,8 @@
 #include "meter.h"
 #include "history_data.h"
 
+#include <chrono>
+
 #define TEST_TASK_PRIORITY ( tskIDLE_PRIORITY + 1UL )
 
 constexpr UBaseType_t STANDARD_TASK_PRIORITY = tskIDLE_PRIORITY + 1ul;
@@ -100,6 +102,7 @@ void display_task(void *) {
 	constexpr uint32_t FPS_CAP{16};
 	// init all globals
 	screen().init();
+	screen().set_backlight(96);
 	draw_ctx().draw.set_font("bitmap8");
 	wifi_page().init(false);
 
@@ -130,6 +133,8 @@ void display_task(void *) {
 		last_ms = ms;
 		dms = .9 * dms + .1 * delta_ms;
 		fps = 1000. / std::max(dms, 1.f);
+		time_t epoch_s = ntp_client::Default().synched() ? ntp_client::Default().get_time_since_epoch(): 0;
+		std::chrono::time_point epoch_t = std::chrono::system_clock::from_time_t(epoch_s);
 		std::string_view fps_string = static_format<20>("FPS: {}", int(fps + .5));
 		float page_a = 0.2;
 		cur_page_offset = (1 - page_a) * cur_page_offset + page_a * page_offset;
@@ -147,12 +152,12 @@ void display_task(void *) {
 		// draw_ctx().draw.text(texts[ms / 3000 % texts.size()], {30 + x_off, 30 + y_off}, 240);
 		draw_ctx().draw.set_pen(0);
 		draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
+		fps_string = static_format<64>("{0:%d}.{0:%m}.{0:%y}\n{0:%R}", epoch_t);
+		draw_ctx().draw.text(fps_string, {5, 1}, 80, 1);
 		float int_power{};
 		for (const InverterGroup &pi: g::inverters().read_power)
 			int_power += pi.inverter.exp_w - pi.inverter.imp_w;
 		int_power += -g::meter().power_info.exp_w + g::meter().power_info.imp_w;
-		tot_imp_wh += g::meter().power_info.imp_w * delta_ms / 1000 / 60 / 60;
-		tot_exp_wh += g::meter().power_info.exp_w * delta_ms / 1000 / 60 / 60;
 		home_power.imp_w = std::max(int_power, 0.f);
 		home_power.exp_w = -std::min(int_power, 0.f);
 		overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, g::inverters().read_power.to_span(), home_power, g::meter().power_info);
@@ -211,7 +216,6 @@ void modbus_task(void *) {
 			vTaskDelay(pdMS_TO_TICKS(1000));
 			continue;
 		}
-		LogInfo("Next iteration");
 		uint32_t start_ms = time_ms();
 		time_t epoch_s = ntp_client::Default().synched() ? ntp_client::Default().get_time_since_epoch(): 0;
 		if (settings::Default().configured_meter != ModbusTcpAddr{})

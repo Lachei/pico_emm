@@ -112,6 +112,25 @@ void draw_battery(Draw &draw, Point center, int height, float soc, DrawSettings 
 	draw.rectangle(Rect{int(center.x - 5 * m), int(center.y - (22 - 56 * (100 - soc) / 100) * m), int(18 * m), int(54 * soc / 100 * m) });
 }
 
+void sort_energy(const static_vector<EnergyBlobInfo, 256> &energy_blobs, static_vector<uint8_t, 256> &blobs_sorted) {
+	static std::array<uint8_t, 256> histogram;
+	histogram = {};
+	blobs_sorted.resize(energy_blobs.size());
+	const auto to_bucket = [] (const EnergyBlobInfo &e) { return 255 - uint8_t(std::min(e.energy / 15000 * 255, 255.f)); };
+	for (const EnergyBlobInfo &b: energy_blobs)
+		histogram[to_bucket(b)] += 1;
+	// exclusive scan
+	int cur{};
+	for (uint8_t &h: histogram) {
+		int pre = cur;
+		cur += h;
+		h = pre;
+	}
+	// scatter
+	for (int i: range(energy_blobs.size()))
+		blobs_sorted[histogram[to_bucket(energy_blobs[i])]++] = i;
+}
+
 bool Button::operator()(Draw &draw, int x_offset) {
 	// drawing stuff
 	Rect pos = this->pos + Point{x_offset, 0};
@@ -442,13 +461,14 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 		}
 	}
 	// remove stale points
+	int prev_size = energy_blobs.size();
 	for (int i = energy_blobs.rev_start_idx(); i >= 0; --i)
 		if (energy_blobs[i].end_device_id == -1)
 			energy_blobs[i] = *energy_blobs.pop();
 
 	// resort points for smallest last (shall be drawn in the front)
-	if (spawn_bubbles)
-		std::sort(energy_blobs.begin(), energy_blobs.end(), [](const EnergyBlobInfo &a, const EnergyBlobInfo &b){ return a.energy > b.energy; });
+	if (spawn_bubbles || prev_size != energy_blobs.size())
+		sort_energy(energy_blobs, blobs_sorted);
 
 	int y_offset = static_cast<int>(this->y_offset);
 	int x_offset = static_cast<int>(x_off + base_offset);
@@ -458,9 +478,9 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 
 	// energy counts
 	std::string_view power = static_format<64>("Importzähler: {:.1f}Wh", tot_imp_wh);
-	draw.text(power.data(), {40 + x_offset, 40}, 80, 1);
+	draw.text(power.data(), {100 + x_offset, 40}, 80, 1);
 	power = static_format<64>("Exportzähler: {:.1f}Wh", tot_exp_wh);
-	draw.text(power.data(), {120 + x_offset, 40}, 80, 1);
+	draw.text(power.data(), {170 + x_offset, 40}, 80, 1);
 
 	// draw paths
 	draw.line({X_INV_CONN + x_offset, Y_BUS}, {X_METER + x_offset, Y_BUS});
@@ -500,7 +520,8 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 
 	// draw energy blobs
 	draw.set_clip(BUBBLE_VIEW_BOX + Point{x_offset, 0});
-	for (const EnergyBlobInfo &blob: energy_blobs) {
+	for (uint8_t blob_i: blobs_sorted) {
+      		const EnergyBlobInfo &blob = energy_blobs[blob_i];
 		float y = blob.y;
 		if (blob.x <= X_INV_CONN) {
 			y += y_offset;
@@ -572,12 +593,10 @@ void draw_data(Draw &draw, const static_ring_buffer<t::data_time, N> &data, MinM
 	m.max += d * .125;
 	d = m.max - m.min;
 	std::optional<float> prev{};
-	for (int i: range(data.size())) {
+	for (int i: range(PLOT_RECT.w)) {
 		int j = x_offset - (i + 1);
-		if (j >=  0)
+		if (j >= 0)
 			continue;
-		if (j < -PLOT_RECT.w)
-			break;
 		t::data_time cur = data[j];
 		if (prev) {
 			int x_start = -i + PLOT_RECT.w + PLOT_RECT.x;
@@ -676,7 +695,7 @@ bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 		return true;
 	}
 	if (drag_history_view && touch_info.cur_touch && touch_info.last_touch) {
-		x_history_offseŧ += touch_info.cur_touch->x - touch_info.last_touch->x;
+		x_history_offseŧ -= touch_info.cur_touch->x - touch_info.last_touch->x;
 		return true;
 	}
 	for (Button *b: time_buttons) {

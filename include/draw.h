@@ -80,7 +80,8 @@ struct OverviewPage {
 	EnergyInfo home_energy_info{.device_id = HOME_ID};
 	EnergyInfo meter_energy_info{.device_id = METER_ID};
 	static_vector<EnergyInfo, 32> energy_infos{};
-	static_vector<EnergyBlobInfo, 128> energy_blobs{};
+	static_vector<EnergyBlobInfo, 256> energy_blobs{};
+	static_vector<uint8_t, 256> blobs_sorted{};
 	double tot_imp_wh{};
 	double tot_exp_wh{};
 
