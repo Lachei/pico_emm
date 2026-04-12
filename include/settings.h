@@ -16,6 +16,9 @@ void print_ip(static_string<N>& s, uint32_t ip, uint16_t port, uint8_t m_id) {
 inline bool request_settings_store{};
 inline bool request_settings_load{};
 struct settings {
+	bool enable_emm{};
+	float max_export{}; // can be used to set maximum export limit of plant
+	static_vector<int, MAX_INVERTERS> inverter_bat_prio{}; // high prio means that the battery should be kept full
 	ModbusTcpAddr configured_meter{};
 	static_vector<ModbusTcpAddr, MAX_INVERTERS> configured_inverters{};
 
@@ -38,7 +41,14 @@ struct settings {
 		s.append("}");
 	}
 
-	constexpr void sanitize() { configured_inverters.sanitize(); }
+	constexpr void sanitize() { 
+		configured_inverters.sanitize(); 
+		inverter_bat_prio.sanitize();
+		if (inverter_bat_prio.size() < configured_inverters.size())
+			for (int i: range(inverter_bat_prio.size(), configured_inverters.size()))
+				inverter_bat_prio[i] = 1;
+		inverter_bat_prio.resize(configured_inverters.size());
+	}
 };
 
 /** @brief prints formatted for monospace output, eg. usb */

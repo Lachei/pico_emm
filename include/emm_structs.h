@@ -27,8 +27,7 @@ struct ControlPowerInfo {
 	float power_max_cha;	// maximum battery charge
 	float power_max_discha;	// maximum battery discharge
 	float requested_power;	// requested power by the emm
-	int fill_priority;	// the higher the more urgent it is to fill the battery of this inverter
-	int drain_priority;	// the higher the more urgent it is to drain the battery of this inverter
+	int bat_priority;	// the higher the more urgent it is to fill the battery of this inverter
 };
 
 constexpr inline float max_exp_pow_avail(const InverterGroup &ig, const ControlPowerInfo &pi) {
@@ -36,7 +35,10 @@ constexpr inline float max_exp_pow_avail(const InverterGroup &ig, const ControlP
 	return std::min(ig.pv.exp_w + bat_avail, pi.power_max);
 }
 constexpr inline float max_imp_pow_avail(const InverterGroup &ig, const ControlPowerInfo &pi) {
-	return ig.bat_soc >= 100 ? 0: std::max(.0f, pi.power_max_cha - ig.pv.exp_w);
+	return ig.bat_soc >= 99 ? 0: std::max(.0f, pi.power_max_cha - ig.pv.exp_w);
+}
+constexpr inline bool requires_charge(const InverterGroup &ig, const ControlPowerInfo &pi) {
+	return ig.bat_soc < pi.min_soc;
 }
 
 constexpr int HOME_ID = 0;

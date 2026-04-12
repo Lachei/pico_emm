@@ -75,7 +75,7 @@ static void add_data(t::device_data &locked_data, float value, time_t epoch_time
 	}
 
 	has_data = locked_data.per_minute.size();
-	uint32_t prev_hour = locked_data.per_minute[-1].time / 3600;
+	uint32_t prev_hour = locked_data.per_second[-1].time / 3600;
 	std::optional<t::data_time> new_per_hour{};
 	if (has_data && prev_hour != epoch_time_s / 3600) {
 		float sum{};
