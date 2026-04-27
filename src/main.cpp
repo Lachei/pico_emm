@@ -144,17 +144,11 @@ void display_task(void *) {
 		float page_a = 0.2;
 		cur_page_offset = (1 - page_a) * cur_page_offset + page_a * page_offset;
 
-		float x_off = std::sin(ms * .003) * 10;
-		float y_off = std::cos(ms * .003) * 10;
-		pp_mat3_t text_pos = pp_mat3_identity();
-		pp_mat3_translate(&text_pos, 50 + x_off, 100 + y_off);
-
 		std::fill(draw_ctx().frame_buffer(), draw_ctx().frame_buffer_end(), 0xffff);
 		draw_ctx().draw.set_pen(0);
 		draw_ctx().draw.text("Minifuzi EMM", {50, 5}, 150);
 		draw_ctx().draw.set_pen(0x4f, 0x9f, 0x98);
 		draw_ctx().draw.line({45, 22}, {174, 22});
-		// draw_ctx().draw.text(texts[ms / 3000 % texts.size()], {30 + x_off, 30 + y_off}, 240);
 		draw_ctx().draw.set_pen(0);
 		draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
 		fps_string = static_format<64>("{0:%d}.{0:%m}.{0:%y}\n{0:%R}", epoch_t);
@@ -162,6 +156,7 @@ void display_task(void *) {
 		update_home_power();
 		overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, g::inverters().read_power.to_span(), home_power, g::meter().power_info);
 		history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset);
+		emm_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, emm(), g::inverters().control_infos.to_span());
 		settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default(), runtime_state::Default());
 		wifi_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, wifi_storage::Default());
 		screen().set_framebuffer(draw_ctx().frame_buffer());
@@ -176,6 +171,7 @@ void display_task(void *) {
 bool handle_touch_pages(TouchInfo &touch_info, int x_offset) {
 	return overview_page().handle_touch_input(touch_info, x_offset) ||
 	history_page().handle_touch_input(touch_info, x_offset) ||
+	emm_page().handle_touch_input(touch_info, x_offset) ||
 	settings_page().handle_touch_input(touch_info, x_offset) ||
 	wifi_page().handle_touch_input(touch_info, x_offset);
 }
@@ -195,7 +191,7 @@ void touchscreen_task(void *) {
 			if (touch_info.last_touch)
 				handle_touch_pages(touch_info, page_offset);
 			// snap to closest page
-			page_offset = std::clamp(std::round(page_offset / 240), -3.f, .0f) * 240.f;
+			page_offset = std::clamp(std::round(page_offset / 240), -4.f, .0f) * 240.f;
 			continue;
 		}
 		TS_Point t = touchscreen().getPoint(0);

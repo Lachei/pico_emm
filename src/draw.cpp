@@ -710,6 +710,49 @@ bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	return false;
 }
 
+void EmmPage::draw(Draw &draw, TimeInfo time_info, float x_off, EMM &emm, std::span<ControlPowerInfo> requested_powers) {
+	int x_offset = int(x_off + base_offset);
+	if (x_offset >= 239 ||
+	    x_offset + 239 <= 0)
+		return;
+
+	if (invert_meter(draw, x_offset)) {
+		invert_meter.style = invert_meter.style == ButtonStyle::DEFAULT ? ButtonStyle::BORDER: ButtonStyle::DEFAULT;
+		invert_meter.text = invert_meter.style == ButtonStyle::DEFAULT ? "" : "X";
+		emm.invert_home = invert_meter.style == ButtonStyle::BORDER;
+	}
+	draw.set_pen(0);
+	draw.text("Hausleistung invert:", {10 + x_offset, 34}, 150, 1);
+	draw.text("Sensitivität (+ -):", {10 + x_offset, 54}, 150, 1);
+	draw.line({105 + x_offset, 56}, {205 + x_offset, 56});
+	int x_sens = std::lerp(113., 200., emm.filter_alpha) + x_offset;
+	draw.line({x_sens, 50}, {x_sens, 63});
+	if (faster_home_adopt(draw, x_offset))
+		emm.filter_alpha = .9 * emm.filter_alpha;
+	if (stabler_home_adopt(draw, x_offset))
+		emm.filter_alpha = 1. - .9 * (1. - emm.filter_alpha);
+
+	draw.set_pen(0);
+	std::string_view power = static_format<64>("Verbrauch geglättet: {:.1f}W", emm.home_power);
+	draw.text(power, {10 + x_offset, 70}, 180, 1);
+	int y = 90;
+	for (int i: range(requested_powers.size())) {
+		power = static_format<64>("Geforderte Leistung {}: {:.1f}W", i, requested_powers[i].requested_power);
+		draw.text(power, {10 + x_offset, y}, 180, 1);
+		y += 15;
+	}
+}
+bool EmmPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
+	x_offset += base_offset;
+	if (invert_meter.handle_touch_input(touch_info, x_offset))
+		return true;
+	if (faster_home_adopt.handle_touch_input(touch_info, x_offset))
+		return true;
+	if (stabler_home_adopt.handle_touch_input(touch_info, x_offset))
+		return true;
+	return false;
+}
+
 void table_background(Draw &draw, int x_offset, int cur_y, int row, int x_start = 15) {
 	draw.set_pen(RGB{200, 200, 255}.to_rgb565());
 	if (row & 1)

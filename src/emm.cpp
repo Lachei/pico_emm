@@ -13,6 +13,8 @@ void EMM::update_power(float home_new, std::span<InverterGroup> inverter_powers,
 	fill_inverter.clear();
 	fillable_full_inverter.clear();
 	// update approximated power
+	if (invert_home)
+		home_new = -home_new;
 	home_power = std::lerp(home_new, home_power, filter_alpha);
 	float needed_power = home_power;
 	// collect inverter extra power they can take up

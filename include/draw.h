@@ -4,6 +4,7 @@
 
 #include "libraries/pico_vector/pico_vector.hpp"
 #include "emm_structs.h"
+#include "emm.h"
 
 using Point = pimoroni::Point;
 using Rect = pimoroni::Rect;
@@ -129,6 +130,16 @@ struct HistoryPage {
 	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
 };
 
+struct EmmPage {
+	float base_offset{480};
+	Button invert_meter{{100, 30, 13, 13}, ""};
+	Button faster_home_adopt{{100, 50, 13, 13}, "<"};
+	Button stabler_home_adopt{{200, 50, 13, 13}, ">"};
+
+	void draw(Draw &display, TimeInfo time_info, float x_offset, EMM &emm, std::span<ControlPowerInfo> requested_powers);
+	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
+};
+
 struct IpButton {
 	Button button;
 	static_string<4> str{};
@@ -136,7 +147,7 @@ struct IpButton {
 struct settings;
 struct runtime_state;
 struct SettingsPage {
-	float base_offset{480};
+	float base_offset{720};
 
 	IpButton ip1_m{.button = {{90, 30, 20, 15}, "..."}};
 	IpButton ip2_m{.button = {{115, 30, 20, 15}, "..."}};
@@ -181,7 +192,7 @@ struct PwdButton {
 };
 constexpr std::string_view KEYBOARD_CHARS{"!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ"};
 struct WifiPage {
-	float base_offset{720};
+	float base_offset{960};
 	Button shift{{10, 220, 35, 15}, "^Shift"};
 	Button del{{55, 220, 15, 15}, "<-"};
 	Button show_pwd{{80, 220, 45, 15}, "Pw zeigen"};
@@ -209,6 +220,11 @@ inline OverviewPage& overview_page() {
 
 inline HistoryPage& history_page() {
 	static HistoryPage page{};
+	return page;
+}
+
+inline EmmPage& emm_page() {
+	static EmmPage page{};
 	return page;
 }
 

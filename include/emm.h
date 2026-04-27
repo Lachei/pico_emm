@@ -8,9 +8,10 @@ struct InverterPower {
 };
 
 struct EMM {
-	float filter_alpha{.1f}; // fraction of history power used to filter the incoming home_power
+	float filter_alpha{.1f}; // fraction of history power used to filter the incoming home_power (0 is using only home power, 1 is only using history home power)
 	float home_power{}; // this is the value that is approximated. Positive means power is consumed
 	static_vector<InverterPower, 32> inverter_target_power{};
+	bool invert_home{};
 
 	// update the control infos of all inverters with a new home power usage
 	// home_new should be given as positive for power consumed from home, negative for power gotten from home
