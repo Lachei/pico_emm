@@ -7,7 +7,7 @@ static static_vector<uint8_t, MAX_INVERTERS> fillable_inverter;
 static static_vector<uint8_t, MAX_INVERTERS> fill_inverter;
 static static_vector<uint8_t, MAX_INVERTERS> fillable_full_inverter;
 
-void EMM::update_power(float home_new, std::span<InverterGroup> inverter_powers, std::span<ControlPowerInfo> inverter_control_values, const settings &s, uint32_t delta_ms) {
+void EMM::update_power(float home_new, std::span<InverterGroup> inverter_powers, std::span<ControlPowerInfo> inverter_control_values, const settings &s) {
 	full_inverter.clear();
 	fillable_inverter.clear();
 	fill_inverter.clear();

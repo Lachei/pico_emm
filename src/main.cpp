@@ -36,6 +36,7 @@
 #include "inverter.h"
 #include "meter.h"
 #include "history_data.h"
+#include "emm.h"
 
 #include <chrono>
 
@@ -91,10 +92,15 @@ static Touchscreen& touchscreen() {
 
 static std::atomic<float> page_offset;
 
-static PowerInfo meter_power {.device_id = METER_ID, .imp_w = 1000, .exp_w = 0};
 static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 2700, .exp_w = 0};
-static double tot_imp_wh{};
-static double tot_exp_wh{};
+void update_home_power() {
+	float int_power{};
+	for (const InverterGroup &pi: g::inverters().read_power)
+		int_power += pi.inverter.exp_w - pi.inverter.imp_w;
+	int_power += -g::meter().power_info.exp_w + g::meter().power_info.imp_w;
+	home_power.imp_w = std::max(int_power, 0.f);
+	home_power.exp_w = -std::min(int_power, 0.f);
+}
 
 std::array<std::string_view, 4> texts{"Hello darkness", "my old friend,", "shall peace and glory", "thy remove"};
 void display_task(void *) {
@@ -111,7 +117,6 @@ void display_task(void *) {
 	float dms{};
 	float cur_page_offset = page_offset;
 	float fps{};
-	uint32_t last_inverter_discovery{};
 	for (;;) {
 		uint32_t ms = time_ms();
 
@@ -154,12 +159,7 @@ void display_task(void *) {
 		draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
 		fps_string = static_format<64>("{0:%d}.{0:%m}.{0:%y}\n{0:%R}", epoch_t);
 		draw_ctx().draw.text(fps_string, {5, 1}, 80, 1);
-		float int_power{};
-		for (const InverterGroup &pi: g::inverters().read_power)
-			int_power += pi.inverter.exp_w - pi.inverter.imp_w;
-		int_power += -g::meter().power_info.exp_w + g::meter().power_info.imp_w;
-		home_power.imp_w = std::max(int_power, 0.f);
-		home_power.exp_w = -std::min(int_power, 0.f);
+		update_home_power();
 		overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, g::inverters().read_power.to_span(), home_power, g::meter().power_info);
 		history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset);
 		settings_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, settings::Default(), runtime_state::Default());
@@ -228,6 +228,13 @@ void modbus_task(void *) {
 		g::meter().wait_requests(1000);
 		int remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
 		g::inverters().wait_all(remaining_time);
+
+		// update requested power
+		update_home_power();
+		emm().update_power(home_power.imp_w - home_power.exp_w, g::inverters().read_power, g::inverters().control_infos, settings::Default());
+		// g::inverters().initiate_send_power_requests_all();
+		// remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
+		// g::inverters().wait_all(remaining_time);
 
 		// history data update
 		if (epoch_s) {

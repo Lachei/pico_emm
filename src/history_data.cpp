@@ -90,7 +90,7 @@ static void add_data(t::device_data &locked_data, float value, time_t epoch_time
 		new_per_hour = {sum / n, prev_hour * 3600};
 	}
 
-	locked_data.per_second.push({value, epoch_time_s});
+	locked_data.per_second.push({value, uint32_t(epoch_time_s)});
 	if (new_per_minute)
 		locked_data.per_minute.push(new_per_minute.value());
 	if (new_per_hour)

@@ -27,9 +27,12 @@ constexpr inline uint16 model_size() { return sizeof(T) / 2 - 2; }
 template<typename T>
 constexpr inline uint16 model_sunspec_size() { return  modbus_swap(uint16_t(sizeof(T) / 2 - 2)); } // division by 2 as we calc in halfes, -2 for id and length
 template<typename T>
-constexpr inline int suns_sizeof(const T& = {}) { return sizeof(T) / 2; }
+constexpr inline uint32_t suns_sizeof(const T& = {}) { return sizeof(T) / 2; }
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
 template<typename T>
-constexpr inline int suns_offsetof(T member) { return (int(*(uintptr_t*)(&member))) / 2; }
+constexpr inline uint32_t suns_offsetof(T member) { return (int(*(uintptr_t*)(&member))) / 2; }
+#pragma GCC diagnostic pop
 struct suns_hdr{
 	uint16_t id;
 	uint16_t _length; // careful, is normally still modbus byte swapped

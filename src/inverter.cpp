@@ -137,7 +137,7 @@ void inverter_infos::initiate_retrieve_infos_all() {
 void inverter_infos::initiate_send_power_requests_all() {
 	CHECK_INVERTER_CONFIGURED;
 	for (int i: range(configured_inverters->size())) {
-		if (connected_names[i].empty() || !contexts[i].connected)
+		if (connected_names[i].empty() || !contexts[i].connected || !control_infos[i].is_active())
 			continue;
 		if (contexts[i].state != pcb_state::IDLE) {
 			LogError("Could not send power for {}: {}, retry {}", connected_names[i].sv(), int(contexts[i].state), contexts[i].wait_count);
@@ -146,7 +146,7 @@ void inverter_infos::initiate_send_power_requests_all() {
 		model_controls *control = contexts[i].modbus.storage.get_addr_as<model_controls>(contexts[i].controls_addr);
 		model_storage *storage = contexts[i].modbus.storage.get_addr_as<model_storage>(contexts[i].storage_addr);
 		// convert requested power to relative values
-		float inv_power_r = std::max(.0f, control_infos[i].requested_power) / control_infos[i].power_max;
+		float inv_power_r = std::clamp(control_infos[i].requested_power, .0f, control_infos[i].power_max) / control_infos[i].power_max;
 		control->WMaxLimPct = modbus_swap(from_float(inv_power_r, modbus_swap_i16(control->WMaxLimPct_SF)));
 		bool charge = control_infos[i].requested_power < 0;
 		float bat_min_soc = charge ? 100: 0;
@@ -171,6 +171,13 @@ void inverter_infos::wait_all(uint32_t timeout_ms) {
 		if (contexts[i].connected && contexts[i].wait_receive)
 			ulTaskNotifyTakeIndexed(i, pdTRUE, pdMS_TO_TICKS(std::max(0, int(end_ms) - int(time_ms()))));
 	for (int i: range(contexts.size())) {
+		if (!control_infos[i].is_active()) {
+			control_infos[i].requested_power = 0;
+			read_power[i].inverter.imp_w = read_power[i].inverter.exp_w = 0;
+			read_power[i].pv.imp_w = read_power[i].pv.exp_w = 0;
+			read_power[i].battery.imp_w = read_power[i].battery.exp_w = 0;
+			read_power[i].bat_soc = 0;
+		}
 		if (contexts[i].state == pcb_state::IDLE) {
 			contexts[i].wait_count = 0;
 			contexts[i].wait_receive = false;
@@ -478,6 +485,7 @@ static void parse_modbus_frame(context_t &context, struct pbuf *&p) {
 	p = nullptr;
 	// updating the inverter informations
 	int i = &context - contexts.begin();
+	inverters().control_infos[i].last_connection_s = time_s();
 	if (context.last_modbus_addr == context.inverter_addr) {
 		const model_inverter *inverter = context.modbus.storage.get_addr_as<model_inverter>(context.inverter_addr);
 		float w = modbus_swap_f(inverter->W);

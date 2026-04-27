@@ -1,6 +1,7 @@
 #pragma once
 
 #include "static_types.h"
+#include "hardware/timer.h"
 
 struct ModbusTcpAddr {
     uint32_t ip{};
@@ -28,6 +29,8 @@ struct ControlPowerInfo {
 	float power_max_discha;	// maximum battery discharge
 	float requested_power;	// requested power by the emm
 	int bat_priority;	// the higher the more urgent it is to fill the battery of this inverter
+	uint32_t last_connection_s;
+	bool is_active() const { return (time_us_64() / 1000000) - last_connection_s < 10; }
 };
 
 constexpr inline float max_exp_pow_avail(const InverterGroup &ig, const ControlPowerInfo &pi) {

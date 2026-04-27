@@ -12,8 +12,9 @@ struct EMM {
 	float home_power{}; // this is the value that is approximated. Positive means power is consumed
 	static_vector<InverterPower, 32> inverter_target_power{};
 
-	// integrate a new smart meter value into the power_home
-	void update_power(float home_new, std::span<InverterGroup> inverter_powers, std::span<ControlPowerInfo> inverter_control_values, const settings &s, uint32_t delta_ms);
+	// update the control infos of all inverters with a new home power usage
+	// home_new should be given as positive for power consumed from home, negative for power gotten from home
+	void update_power(float home_new, std::span<InverterGroup> inverter_powers, std::span<ControlPowerInfo> inverter_control_values, const settings &s);
 };
 
 inline EMM& emm() {

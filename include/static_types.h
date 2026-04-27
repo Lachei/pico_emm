@@ -84,7 +84,7 @@ struct static_vector {
 	constexpr int resize(int s) { return cur_size = std::clamp(s, 0, N); }
 	constexpr void sanitize() { if (cur_size > N || cur_size < 0) cur_size = 0; }
 	constexpr int rev_start_idx() const { return cur_size - 1; }
-	constexpr std::span<T> to_span() { return {begin(), cur_size}; }
+	constexpr std::span<T> to_span() { return {begin(), size_t(cur_size)}; }
 };
 
 template<typename T, int N>
