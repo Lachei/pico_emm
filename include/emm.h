@@ -12,6 +12,7 @@ struct EMM {
 	float home_power{}; // this is the value that is approximated. Positive means power is consumed
 	static_vector<InverterPower, 32> inverter_target_power{};
 	bool invert_home{};
+	bool enable_control{};
 
 	// update the control infos of all inverters with a new home power usage
 	// home_new should be given as positive for power consumed from home, negative for power gotten from home

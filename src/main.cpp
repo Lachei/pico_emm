@@ -228,9 +228,11 @@ void modbus_task(void *) {
 		// update requested power
 		update_home_power();
 		emm().update_power(home_power.imp_w - home_power.exp_w, g::inverters().read_power, g::inverters().control_infos, settings::Default());
-		// g::inverters().initiate_send_power_requests_all();
-		// remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
-		// g::inverters().wait_all(remaining_time);
+		if (emm().enable_control) {
+			g::inverters().initiate_send_power_requests_all();
+			remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
+			g::inverters().wait_all(remaining_time);
+		}
 
 		// history data update
 		if (epoch_s) {

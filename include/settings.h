@@ -84,7 +84,7 @@ inline std::istream& operator>>(std::istream &is, settings &s) {
 		is >> ip;
 		ModbusTcpAddr *conf_ip = s.configured_inverters.push();
 		if (!conf_ip)
-			is.fail();
+			is.setstate(std::ios_base::failbit);
 		else {
 			*conf_ip = {};
 			parse_ip(ip, *conf_ip);
@@ -94,7 +94,7 @@ inline std::istream& operator>>(std::istream &is, settings &s) {
 		parse_ip(ip, s.configured_meter);
 
 	} else
-		is.fail();
+		is.setstate(std::ios_base::failbit);
 	return is;
 }
 

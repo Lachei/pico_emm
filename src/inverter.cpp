@@ -146,8 +146,9 @@ void inverter_infos::initiate_send_power_requests_all() {
 		model_controls *control = contexts[i].modbus.storage.get_addr_as<model_controls>(contexts[i].controls_addr);
 		model_storage *storage = contexts[i].modbus.storage.get_addr_as<model_storage>(contexts[i].storage_addr);
 		// convert requested power to relative values
-		float inv_power_r = std::clamp(control_infos[i].requested_power, .0f, control_infos[i].power_max) / control_infos[i].power_max;
+		float inv_power_r = std::clamp(control_infos[i].requested_power, .0f, control_infos[i].power_max) / control_infos[i].power_max * 100.f;
 		control->WMaxLimPct = modbus_swap(from_float(inv_power_r, modbus_swap_i16(control->WMaxLimPct_SF)));
+		LogInfo("Power req {}: {}%", i, inv_power_r);
 		bool charge = control_infos[i].requested_power < 0;
 		float bat_min_soc = charge ? 100: 0;
 		float bat_cha_r = charge ? 

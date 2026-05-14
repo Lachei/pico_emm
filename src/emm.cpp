@@ -23,6 +23,8 @@ void EMM::update_power(float home_new, std::span<InverterGroup> inverter_powers,
 	float inverter_fillable_power{};
 	float priority_sum{};
 	for (int i: range(inverter_powers.size())) {
+		if (inverter_control_values[i].bat_priority == 0)
+			inverter_control_values[i].bat_priority = 1;
 		float imp_avail = max_imp_pow_avail(inverter_powers[i], inverter_control_values[i]);
 		inverter_fillable_power += imp_avail;
 		// inverters which are below the min_soc are force charged with full power -> add to home_power (which )
@@ -43,12 +45,15 @@ void EMM::update_power(float home_new, std::span<InverterGroup> inverter_powers,
 	}
 
 	// trying to distribute the needed power to all inverters according to the bat priorities
-	float remaining_power{needed_power};
+	float covered_power{};
 	for (int i: fillable_full_inverter) {
 		float prio = 1.f / (inverter_control_values[i].bat_priority * priority_sum);
-		inverter_control_values[i].requested_power = std::min(inverter_control_values[i].power_max, prio * remaining_power);
-		remaining_power -= inverter_powers[i].inverter.exp_w; // use the real export power to account for empty batteries
+		if (inverter_control_values[i].power_max == 0)
+			inverter_control_values[i].power_max = 10000;
+		inverter_control_values[i].requested_power = std::min(inverter_control_values[i].power_max, prio * needed_power);
+		covered_power += inverter_control_values[i].requested_power;// inverter.exp_w; // use the real export power to account for empty batteries
 	}
+	float remaining_power = needed_power - covered_power;
 
 	// distributing the rest of the needed power
 	for (int i: fillable_full_inverter) {

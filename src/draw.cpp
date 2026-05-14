@@ -7,6 +7,8 @@
 #include "wifi_storage.h"
 #include "history_data.h"
 
+constexpr uint32_t time_s() { return time_us_64() / 1000000; }
+
 #define RECTE(x, y, width, height, e) Line{{x,y}, {x + width, y}}, \
 				  Line{{x + width,y}, {x + width, y + height + e}}, \
 				  Line{{x + width,y + height}, {x, y + height}}, \
@@ -614,7 +616,7 @@ void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off) {
 	    x_offset + 239 <= 0)
 		return;
 
-	if (!drag_history_view)
+	if (!drag_history_view && time_s() - drag_history_ts > 3) // only after 10 seconds scroll back
  		x_history_offseŧ = .65 * x_history_offseŧ; // converges to 0
 
 	// the buttons are only the selectors. The data is set in the main loop according to this->selected_history
@@ -692,6 +694,7 @@ bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	x_offset += base_offset;
 	if (touch_info.touch_ended() && drag_history_view) {
 		drag_history_view = false;
+		drag_history_ts = time_s();
 		return true;
 	}
 	if (drag_history_view && touch_info.cur_touch && touch_info.last_touch) {
@@ -733,13 +736,24 @@ void EmmPage::draw(Draw &draw, TimeInfo time_info, float x_off, EMM &emm, std::s
 		emm.filter_alpha = 1. - .9 * (1. - emm.filter_alpha);
 
 	draw.set_pen(0);
+	draw.text("Kontrolle An:", {10 + x_offset, 74}, 150l, 1);
+	if (enable_control(draw, x_offset)) {
+		enable_control.style = enable_control.style == ButtonStyle::DEFAULT ? ButtonStyle::BORDER: ButtonStyle::DEFAULT;
+		enable_control.text = enable_control.style == ButtonStyle::DEFAULT ? "" : "X";
+		emm.enable_control = enable_control.style == ButtonStyle::BORDER;
+	}
+	draw.set_pen(0);
 	std::string_view power = static_format<64>("Verbrauch geglättet: {:.1f}W", emm.home_power);
-	draw.text(power, {10 + x_offset, 70}, 180, 1);
-	int y = 90;
+	draw.text(power, {10 + x_offset, 90}, 180, 1);
+	int y = 110;
 	for (int i: range(requested_powers.size())) {
 		power = static_format<64>("Geforderte Leistung {}: {:.1f}W", i, requested_powers[i].requested_power);
 		draw.text(power, {10 + x_offset, y}, 180, 1);
 		y += 15;
+	}
+	for (int i: range(1, 10)) {
+		draw.text(log_storage::Default().logs[-i].message.sv(), {10 + x_offset, y}, 240, 1);
+		y += 11;
 	}
 }
 bool EmmPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
@@ -749,6 +763,8 @@ bool EmmPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	if (faster_home_adopt.handle_touch_input(touch_info, x_offset))
 		return true;
 	if (stabler_home_adopt.handle_touch_input(touch_info, x_offset))
+		return true;
+	if (enable_control.handle_touch_input(touch_info, x_offset))
 		return true;
 	return false;
 }

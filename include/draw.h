@@ -124,6 +124,7 @@ struct HistoryPage {
 	Button net_power_button{{190, 30, 30, 15}, "Net W"};
 
 	bool drag_history_view{};
+	uint32_t drag_history_ts{};
 
 	// data is directly accessed by history data singletons
 	void draw(Draw &display, TimeInfo time_info, float x_offset);
@@ -135,6 +136,7 @@ struct EmmPage {
 	Button invert_meter{{100, 30, 13, 13}, ""};
 	Button faster_home_adopt{{100, 50, 13, 13}, "<"};
 	Button stabler_home_adopt{{200, 50, 13, 13}, ">"};
+	Button enable_control{{100, 70, 13, 13}, ""};
 
 	void draw(Draw &display, TimeInfo time_info, float x_offset, EMM &emm, std::span<ControlPowerInfo> requested_powers);
 	bool handle_touch_input(TouchInfo &touch_info, int x_offset);
