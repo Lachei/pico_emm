@@ -207,6 +207,7 @@ void touchscreen_task(void *) {
 }
 void modbus_task(void *) {
 	LogInfo("Modbus/control/history thread started");
+	constexpr int max_timeout = 1000;
 	for (;;) {
 		if (!wifi_storage::Default().wifi_connected) {
 			vTaskDelay(pdMS_TO_TICKS(1000));
@@ -221,8 +222,8 @@ void modbus_task(void *) {
 		g::meter().initiate_retrieve_infos();
 		g::inverters().initiate_retrieve_infos_all();
 
-		g::meter().wait_requests(1000);
-		int remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
+		g::meter().wait_requests(max_timeout);
+		int remaining_time = std::max(max_timeout - int(time_ms() - start_ms), 0);
 		g::inverters().wait_all(remaining_time);
 
 		// update requested power
@@ -230,13 +231,14 @@ void modbus_task(void *) {
 		emm().update_power(home_power.imp_w - home_power.exp_w, g::inverters().read_power, g::inverters().control_infos, settings::Default());
 		if (emm().enable_control) {
 			g::inverters().initiate_send_power_requests_all();
-			remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
+			remaining_time = std::max(max_timeout - int(time_ms() - start_ms), 0);
 			g::inverters().wait_all(remaining_time);
 		}
 
 		// history data update
 		if (epoch_s) {
 			hd::write_meter_data(g::meter().power_info.imp_w - g::meter().power_info.exp_w, epoch_s);
+			hd::write_any_data(0, home_power.imp_w - home_power.exp_w, epoch_s);
 			for (const InverterGroup &ig: g::inverters().read_power) {
 				hd::write_inverter_data(ig.inverter.device_id, ig.inverter.imp_w - ig.inverter.exp_w, epoch_s);
 				if (ig.pv.device_id > 0)
@@ -263,7 +265,7 @@ void modbus_task(void *) {
 					d.device_id = -1;
 		}
 
-		remaining_time = std::max(1000 - int(time_ms() - start_ms), 0);
+		remaining_time = std::max(max_timeout - int(time_ms() - start_ms), 0);
 		vTaskDelay(pdMS_TO_TICKS(remaining_time));
 	}
 

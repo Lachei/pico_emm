@@ -217,8 +217,21 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 	float ds = time_info.delta_ms / 1000.f;
 
 
+	if (ntp_client::Default().synched()) {
+		uint32_t cur_day = ntp_client::Default().get_days_since_epoch();
+		if (last_day != cur_day) {
+			daily_imp_wh = {};
+			daily_exp_wh = {};
+			daily_consumption_wh = {};
+		}
+		last_day = cur_day;
+	}
 	tot_imp_wh += meter.imp_w * ds / 60 / 60;
 	tot_exp_wh += meter.exp_w * ds / 60 / 60;
+	tot_consumption_wh += home.imp_w * ds / 60 / 60;
+	daily_imp_wh += meter.imp_w * ds / 60 / 60;
+	daily_exp_wh += meter.exp_w * ds / 60 / 60;
+	daily_consumption_wh += home.imp_w * ds / 60 / 60;
 	home_energy_info.imp_ws += home.imp_w * ds;
 	home_energy_info.exp_ws += home.exp_w * ds;
 	meter_energy_info.imp_ws += meter.exp_w * ds; // is swapped on purpose
@@ -479,10 +492,21 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 		return;
 
 	// energy counts
-	std::string_view power = static_format<64>("Importzähler: {:.1f}Wh", tot_imp_wh);
-	draw.text(power.data(), {100 + x_offset, 40}, 80, 1);
-	power = static_format<64>("Exportzähler: {:.1f}Wh", tot_exp_wh);
-	draw.text(power.data(), {170 + x_offset, 40}, 80, 1);
+	// total
+	std::string_view power = static_format<64>("Imp: {:.1f}Wh", tot_imp_wh);
+	draw.text(power.data(), {90 + x_offset, 30}, 30, 1);
+	power = static_format<64>("Exp: {:.1f}Wh", tot_exp_wh);
+	draw.text(power.data(), {135 + x_offset, 30}, 30, 1);
+	power = static_format<64>("Verbrauch: {:.1f}Wh", tot_consumption_wh);
+	draw.text(power.data(), {180 + x_offset, 30}, 50, 1);
+	// daily
+	draw.text("Täglich:", {90 + x_offset, 50}, 30, 1);
+	power = static_format<64>("Imp: {:.1f}Wh", daily_imp_wh);
+	draw.text(power.data(), {90 + x_offset, 60}, 30, 1);
+	power = static_format<64>("Exp: {:.1f}Wh", daily_exp_wh);
+	draw.text(power.data(), {135 + x_offset, 60}, 30, 1);
+	power = static_format<64>("Verbrauch: {:.1f}Wh", daily_consumption_wh);
+	draw.text(power.data(), {180 + x_offset, 60}, 50, 1);
 
 	// draw paths
 	draw.line({X_INV_CONN + x_offset, Y_BUS}, {X_METER + x_offset, Y_BUS});
@@ -638,9 +662,6 @@ void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off) {
 			b->style = ButtonStyle::DEFAULT;
 		hour_button.style = ButtonStyle::BORDER;
 	}
-	if (net_power_button(draw, x_offset)) {
-		net_power_button.style = net_power_button.is_selected() ? ButtonStyle::DEFAULT: ButtonStyle::BORDER;
-	}
 
 	static MinMax pow_bounds{-10000, 10000};
 	MinMax cur_pow_bounds{-10000, 10000};
@@ -654,12 +675,11 @@ void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off) {
 
 	{ // drawing curves
 		t::locked_data<t::device_data> meter = g::meter_data.access();
+		t::locked_data<static_vector<t::device_data, 4>> any = g::any_data.access();
 		t::locked_data<std::array<t::id_data, MAX_INVERTERS * 2>> inverter = g::inverter_data.access();
 		t::locked_data<std::array<t::id_data, MAX_INVERTERS>> soc = g::soc_data.access();
-		uint8_t r{100}, g{200}, b{};
 		const auto draw_per_x = [&](auto member) {
-			draw.set_pen(COL_METER);
-			draw_data(draw, meter.data.*member, pow_bounds, x_history_offseŧ, x_offset);
+			uint8_t r{100}, g{200}, b{};
 			for (const t::id_data &id_data: inverter.data) {
 				if (id_data.device_id < 0)
 					continue;
@@ -667,13 +687,18 @@ void HistoryPage::draw(Draw &draw, TimeInfo time_info, float x_off) {
 				draw_data(draw, id_data.data.*member, pow_bounds, x_history_offseŧ, x_offset);
 				r += 30; g += 56; b += 111;
 			}
+			r = {100}; g = {200}; b = {};
 			for (const t::id_data &id_data: soc.data) {
 				if (id_data.device_id < 0)
 					continue;
 				draw.set_pen(r, g, b);
-				draw_data(draw, id_data.data.*member, pow_bounds, x_history_offseŧ, x_offset);
+				draw_data(draw, id_data.data.*member, {-110, 110}, x_history_offseŧ, x_offset);
 				r += 30; g += 56; b += 111;
 			}
+			draw.set_pen(COL_METER);
+			draw_data(draw, meter.data.*member, pow_bounds, x_history_offseŧ, x_offset);
+			draw.set_pen(COL_HOME);
+			draw_data(draw, any.data[0].*member, pow_bounds, x_history_offseŧ, x_offset);
 		};
 		switch (selected_history) {
 			case SelectedHistory::SECOND:
@@ -705,8 +730,6 @@ bool HistoryPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 		if (b->handle_touch_input(touch_info, x_offset))
 			return true;
 	}
-	if (net_power_button.handle_touch_input(touch_info, x_offset))
-		return true;
 	Rect history_r = PLOT_RECT + Point{x_offset, 0};
 	if (touch_info.touch_started() && history_r.contains(*touch_info.cur_touch))
 		return drag_history_view = true;

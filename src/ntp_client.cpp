@@ -88,8 +88,13 @@ void ntp_client::update_time() {
     }
 }
 
-time_t ntp_client::get_time_since_epoch() {
+time_t ntp_client::get_time_since_epoch() const {
     return ntp_time + (time_us_64() / 1000000u) - local_time;
+}
+
+uint32_t ntp_client::get_days_since_epoch() const {
+    time_t secs = get_time_since_epoch();
+    return secs / (60 * 60 * 24);
 }
 
 void ntp_client::set_time_since_epoch(time_t t) {

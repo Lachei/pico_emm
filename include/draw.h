@@ -83,8 +83,13 @@ struct OverviewPage {
 	static_vector<EnergyInfo, 32> energy_infos{};
 	static_vector<EnergyBlobInfo, 256> energy_blobs{};
 	static_vector<uint8_t, 256> blobs_sorted{};
+	uint32_t last_day{};
 	double tot_imp_wh{};
 	double tot_exp_wh{};
+	double tot_consumption_wh{};
+	double daily_imp_wh{};
+	double daily_exp_wh{};
+	double daily_consumption_wh{};
 
 	void draw(Draw &display, TimeInfo time_info, float x_offset, 
 	   std::span<InverterGroup> inverter_groups, PowerInfo home, PowerInfo meter);
@@ -121,7 +126,6 @@ struct HistoryPage {
 	Button minute_button{{65, 30, 50, 15}, "Minütlich"};
 	Button hour_button{{120, 30, 50, 15}, "Stündlich"};
 	std::array<Button*, 3> time_buttons{&second_button, &minute_button, &hour_button};
-	Button net_power_button{{190, 30, 30, 15}, "Net W"};
 
 	bool drag_history_view{};
 	uint32_t drag_history_ts{};
