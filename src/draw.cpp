@@ -446,7 +446,7 @@ void OverviewPage::draw(Draw &draw, TimeInfo time_info, float x_off,
 					blob.dir = Direction::RIGHT;
 				} else if (blob.x != X_HOME_CONN && (blob.x != X_INV_CONN || goal_x <= X_INV_CONN) && crossed(blob.y, prev_y, goal_y)) {
 					int x_mult = blob.x < goal_x ? 1: -1;
-					blob.x += x_mult + std::abs(blob.y - goal_y);
+					blob.x += x_mult * std::abs(blob.y - goal_y);
 					blob.y = goal_y;
 					blob.dir = blob.x < goal_x ? Direction::RIGHT: Direction::LEFT;
 				}
@@ -623,6 +623,8 @@ void draw_data(Draw &draw, const static_ring_buffer<t::data_time, N> &data, MinM
 		int j = x_offset - (i + 1);
 		if (j >= 0)
 			continue;
+		if (-j > data.size()) // no older data available (also avoids reading out of the ring buffer)
+			break;
 		t::data_time cur = data[j];
 		if (prev) {
 			int x_start = -i + PLOT_RECT.w + PLOT_RECT.x;
@@ -929,7 +931,7 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 			selected_ip->str.pop();
 			selected_ip->button.text = selected_ip->str.sv();
 		} else if (selected_ip == &port || selected_ip == &port_m) {
-			uint32_t p = to_int(port.button.text).value_or(0);
+			uint32_t p = to_int(selected_ip->str.sv()).value_or(0);
 			bool can_append = 10 * p + to_int(button->text).value_or(0) <= 0xffff;
 			if (can_append) {
 				selected_ip->str.append(button->text);
@@ -1041,8 +1043,9 @@ void WifiPage::draw(Draw &draw, TimeInfo time_info, float x_off, wifi_storage &w
 	if (show_pwd(draw, x_offset))
 		show_pwd.style = show_pwd.is_selected() ? ButtonStyle::DEFAULT: ButtonStyle::BORDER;
 	
-	if (connect(draw, x_offset) && selected_pwd) {
-		int wifi_idx = selected_pwd - wifi_pwds.begin();
+	int selected_idx = selected_pwd - wifi_pwds.begin();
+	if (connect(draw, x_offset) && selected_pwd && selected_idx < w.wifis.size()) {
+		int wifi_idx = selected_idx;
 		w.ssid_wifi.fill(w.wifis[wifi_idx].ssid.sv());
 		w.ssid_wifi.make_c_str_safe();
 		w.pwd_wifi.fill(selected_pwd->pwd.sv());

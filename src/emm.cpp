@@ -20,20 +20,26 @@ void EMM::update_power(float home_new, std::span<InverterGroup> inverter_powers,
 	// collect inverter extra power they can take up
 	// eg. battery is not full and their pv does not supply full power
 	// this is needed to avoid toggeling all inverters even though 1 inverter still needs power for filling up a battery
-	float inverter_fillable_power{};
+	float inverter_fillable_power{}; // power the fillable (not full, not force charged) inverters can take up
 	float priority_sum{};
 	for (int i: range(inverter_powers.size())) {
+		// inverters that are not reachable can neither take up nor deliver power
+		if (!inverter_control_values[i].is_active()) {
+			inverter_control_values[i].requested_power = 0;
+			continue;
+		}
 		if (inverter_control_values[i].bat_priority == 0)
 			inverter_control_values[i].bat_priority = 1;
 		float imp_avail = max_imp_pow_avail(inverter_powers[i], inverter_control_values[i]);
-		inverter_fillable_power += imp_avail;
 		// inverters which are below the min_soc are force charged with full power -> add to home_power (which )
 		if (requires_charge(inverter_powers[i], inverter_control_values[i])) {
 			needed_power += imp_avail;
-			inverter_control_values[i].requested_power = -inverter_control_values[i].power_max_cha;
+			// the battery charges with full power, pv covers part of it, the rest is taken from the ac side
+			inverter_control_values[i].requested_power = -imp_avail;
 			fill_inverter.push(i);
 		}
 		else if (inverter_powers[i].bat_soc < 98) { // only inverters which do not need to get charged can be required to export
+			inverter_fillable_power += imp_avail;
 			fillable_inverter.push(i);
 			fillable_full_inverter.push(i);
 			priority_sum += 1.f / inverter_control_values[i].bat_priority;
@@ -69,17 +75,17 @@ void EMM::update_power(float home_new, std::span<InverterGroup> inverter_powers,
 	}
 	// distributing overpower from full inverters (simply settings the export to max pow of inverter with a power ramp from 98 to 99 soc)
 	float remaining_export = s.max_export;
+	const float fillable_power_total = inverter_fillable_power;
 	for (int i: full_inverter) {
 		float max = inverter_control_values[i].power_max;
 		float export_power = std::clamp(std::lerp(0.f, max, inverter_powers[i].bat_soc - 98.f), 0.f, max);
-		if (export_power < 0)
-			continue;
-		// distribute the available power evenly accross other importable inverter
-		if (export_power > 0) {
+		// distribute the available power accross the other importable inverters according to how much they can take up
+		if (export_power > 0 && inverter_fillable_power > 0) {
 			float p = std::min(export_power, inverter_fillable_power);
-      			export_power -= p;
 			for (int j: fillable_inverter)
-				inverter_control_values[j].requested_power -= p / fillable_inverter.size();
+				inverter_control_values[j].requested_power -= p * max_imp_pow_avail(inverter_powers[j], inverter_control_values[j]) / fillable_power_total;
+			export_power -= p;
+			inverter_fillable_power -= p; // the capacity is used up for the next full inverter
 			inverter_control_values[i].requested_power += p;
 		}
 		// export rest to grid

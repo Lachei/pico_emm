@@ -8,7 +8,7 @@ parser = argparse.ArgumentParser(
                     prog='TestIotServer',
                     description='Emulates the pico iot device')
 
-parser.add_argument('-p', '--port', help='The port the server listens to, default: 8080', default=8080);
+parser.add_argument('-p', '--port', help='The port the server listens to, default: 8080', default=8080, type=int);
 
 args = parser.parse_args()
 
@@ -16,6 +16,7 @@ log_counter = 0
 login_counter = 0
 hostname = "A beatiful thing"
 ap_active = "true"
+max_export = 0.0
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -67,6 +68,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(f"{int(time.time())}".encode())
+        elif self.path == '/max_export':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(f"{max_export}".encode())
         else:
             super().do_GET()
 
@@ -74,7 +80,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         global login_counter
         global hostname
         global ap_active
-        if self.path == '/host_name':
+        global max_export
+        if self.path == '/max_export':
+            content_len = int(self.headers.get('content-length', 0))
+            try:
+                value = float(self.rfile.read(content_len).decode())
+                if value < 0:
+                    raise ValueError()
+                max_export = value
+                self.send_response(200)
+            except ValueError:
+                self.send_response(400)
+            self.end_headers()
+        elif self.path == '/host_name':
             content_len = int(self.headers.get('content-length', 0))
             hostname = self.rfile.read(content_len).decode()
             self.send_response(200)

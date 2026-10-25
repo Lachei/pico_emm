@@ -121,18 +121,23 @@ void display_task(void *) {
 		uint32_t ms = time_ms();
 
 		// single place where storaeg is loaded and written
+		// the flags are reset before the action so that requests coming in meanwhile are not lost
 		if (request_settings_store) {
+			request_settings_store = false;
 			screen().wait_for_vsync();
 			persistent_storage_t::Default().write(settings::Default(), &persistent_storage_layout::persistent_settings);
 		}
-		if (request_settings_load)
+		if (request_settings_load) {
+			request_settings_load = false;
 			persistent_storage_t::Default().read(&persistent_storage_layout::persistent_settings, settings::Default());
+			settings::Default().sanitize();
+		}
 		if (request_store_wifi) {
+			request_store_wifi = false;
 			screen().wait_for_vsync();
 			persistent_storage_t::Default().write(wifi_storage::Default().ssid_wifi, &persistent_storage_layout::ssid_wifi);
 			persistent_storage_t::Default().write(wifi_storage::Default().pwd_wifi, &persistent_storage_layout::pwd_wifi);
 		}
-		request_settings_store = request_settings_load = request_store_wifi = false;
 
 		uint32_t delta_ms = ms - last_ms;
 		last_ms = ms;
@@ -181,6 +186,8 @@ void touchscreen_task(void *) {
 		LogError("Failed to init touchscreen");
 
 	TouchInfo touch_info;
+	constexpr float PAGE_DRAG_THRESHOLD{8}; // dragging the page further than this does not count as a tap anymore
+	float page_drag{};
 
 	for (;;) {
 		vTaskDelay(pdMS_TO_TICKS(50));
@@ -188,8 +195,13 @@ void touchscreen_task(void *) {
 		touch_info.cur_touch = {};
 		uint8_t touches = touchscreen().touched();
 		if (!touches) {
-			if (touch_info.last_touch)
+			if (touch_info.last_touch) {
+				// the page was swiped, release outside of everything so no button gets pressed
+				if (page_drag > PAGE_DRAG_THRESHOLD)
+					touch_info.last_touch = Point{-1000, -1000};
 				handle_touch_pages(touch_info, page_offset);
+			}
+			page_drag = 0;
 			// snap to closest page
 			page_offset = std::clamp(std::round(page_offset / 240), -4.f, .0f) * 240.f;
 			continue;
@@ -202,6 +214,7 @@ void touchscreen_task(void *) {
 		if (!touch_handled && !touch_info.touch_started()) { // dragging
 			float dx = (touch_info.cur_touch->x - touch_info.last_touch->x); // divide by 2 due to diff in screen res and internal pixel
 			page_offset += dx;
+			page_drag += std::abs(dx);
 		}
 	}
 }
@@ -229,8 +242,18 @@ void modbus_task(void *) {
 		// update requested power
 		update_home_power();
 		emm().update_power(home_power.imp_w - home_power.exp_w, g::inverters().read_power, g::inverters().control_infos, settings::Default());
-		if (emm().enable_control) {
-			g::inverters().initiate_send_power_requests_all();
+		// when the control gets disabled the limits are removed so the inverters run their own control again
+		// (repeated a few cycles as a busy inverter skips a request, the revert timeout is the last fallback)
+		static bool control_was_enabled{};
+		static int release_sends_left{};
+		if (!emm().enable_control && control_was_enabled)
+			release_sends_left = 3;
+		control_was_enabled = emm().enable_control;
+		bool release = !emm().enable_control && release_sends_left > 0;
+		if (release)
+			--release_sends_left;
+		if (emm().enable_control || release) {
+			g::inverters().initiate_send_power_requests_all(release);
 			remaining_time = std::max(max_timeout - int(time_ms() - start_ms), 0);
 			g::inverters().wait_all(remaining_time);
 		}
@@ -256,6 +279,16 @@ void modbus_task(void *) {
 				if (d.device_id != -1 &&  // reset history data for disconnected devices
 					!(g::inverters().read_power | find{[&d](const InverterGroup &g){ return g.inverter.device_id == d.device_id || g.pv.device_id == d.device_id || g.battery.device_id == d.device_id; }}))
 					d.device_id = -1;
+		}
+		{	// connected inverters for the settings page
+			static static_vector<AddrName, MAX_INVERTERS> found_ips{}; // static to keep it off the small task stack
+			found_ips.clear();
+			for (int i: range(g::inverters().connected_names.size())) {
+				if (g::inverters().connected_names[i].empty() || i >= settings::Default().configured_inverters.size())
+					continue;
+				found_ips.push(AddrName{.addr = settings::Default().configured_inverters[i], .name = g::inverters().connected_names[i]});
+			}
+			runtime_state::Default().found_ips = found_ips;
 		}
 		{	// stale soc data
 			t::locked_data<std::array<t::id_data, MAX_INVERTERS>> locked_data = g::soc_data.access();
@@ -288,6 +321,7 @@ void wifi_search_task(void *) {
 	constexpr uint32_t ap_timeout = 10;
 	uint32_t cur_time = time_s();
 	uint32_t last_conn = cur_time;
+	bool ap_auto_started{}; // the fallback access point is only shut down automatically if it was also started automatically
 
 	for (;;) {
 		cur_time = time_s();
@@ -299,9 +333,17 @@ void wifi_search_task(void *) {
 		if (dt % 30 == 7) // every 30 seconds enable reconnect try
 			wifi_storage::Default().wifi_changed = true;
 		if (dt > ap_timeout) {
-			access_point::Default().init();
+			if (!access_point::Default().active) {
+				access_point::Default().init();
+				ap_auto_started = true;
+			}
 			cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, cur_time & 1);
 		} else {
+			// connection is back, the fallback access point is not needed anymore
+			if (ap_auto_started && wifi_storage::Default().wifi_connected) {
+				access_point::Default().deinit();
+				ap_auto_started = false;
+			}
 			cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, wifi_storage::Default().wifi_connected);
 		}
 		wifi_storage::Default().update_scanned();

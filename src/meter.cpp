@@ -30,6 +30,7 @@ struct context {
 	bool request_close{};
 	int wait_count{};
 	int tcp_frame{};
+	uint32_t last_update_s{};
 	e::state state{e::state::IDLE};
 	modbus_register<meter_layout> modbus{.addr = 0}; // client always has addr 1
 };
@@ -38,6 +39,8 @@ static t::context context{};
 static TaskHandle_t parent_task{};
 
 constexpr uint32_t time_ms() { return time_us_64() / 1000; }
+constexpr uint32_t time_s() { return time_us_64() / 1000000; }
+constexpr uint32_t METER_STALE_S{10};
 
 static void init_pcb(t::context &context);
 static void tcp_err_cb(void *arg, err_t err);
@@ -45,12 +48,21 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t 
 static err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len);
 static err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err);
 static err_t tcp_pcb_close(tcp_pcb *pcb);
-static void advance_context_state(t::context &context, struct pbuf *p = {});
+static void advance_context_state(t::context &context, bool received = false);
 
 void meter_info::initiate_discover(ModbusTcpAddr address) {
 	parent_task = xTaskGetCurrentTaskHandle();
-	if (false && address != addr && context.pcb)
-		context.request_close = true; // close previous connection
+	if (address != addr) { // close previous connection and restart discovery with the new address
+		cyw43_arch_lwip_begin();
+		tcp_pcb_close(context.pcb);
+		cyw43_arch_lwip_end();
+		context.pcb = {};
+		context.connected = context.wait_receive = context.request_close = false;
+		context.state = e::state::IDLE;
+		context.wait_count = 0;
+		name.fill(CONNECTING);
+		power_info.imp_w = power_info.exp_w = 0;
+	}
 	addr = address;
 	power_info.device_id = METER_ID;
 	if (!context.pcb) {
@@ -61,13 +73,15 @@ void meter_info::initiate_discover(ModbusTcpAddr address) {
 	if (!context.pcb)
 		return;
 	ip_addr_t ip{.addr = PP_HTONL(addr.ip)};
-	if (!context.connected) {
+	if (!context.connected && context.state != e::state::CONNECTING) {
 		LogInfo("Tcp connect meter");
 		context.state = e::state::CONNECTING;
 		context.wait_receive = true;
 		cyw43_arch_lwip_begin();
-		tcp_connect(context.pcb, &ip, addr.port, tcp_connect_cb);
+		err_t err = tcp_connect(context.pcb, &ip, addr.port, tcp_connect_cb);
 		cyw43_arch_lwip_end();
+		if (err != ERR_OK)
+			LogError("Tcp connect meter failed {}", err);
 	}
 }
 void meter_info::initiate_retrieve_infos() {
@@ -85,10 +99,12 @@ void meter_info::initiate_retrieve_infos() {
 	cyw43_arch_lwip_end();
 }
 void meter_info::wait_requests(uint32_t timeout_ms) {
-	if (!context.connected)
-		return;
-	ulTaskNotifyTakeIndexed(MAX_INVERTERS, pdTRUE, pdMS_TO_TICKS(timeout_ms));
-	if (context.state == e::state::IDLE) {
+	// do not keep stale values if the meter is not reachable anymore
+	if (time_s() - context.last_update_s > METER_STALE_S)
+		power_info.imp_w = power_info.exp_w = 0;
+	if (context.connected && context.wait_receive)
+		ulTaskNotifyTakeIndexed(MAX_INVERTERS, pdTRUE, pdMS_TO_TICKS(timeout_ms));
+	if (context.state == e::state::IDLE || !context.pcb) {
 		context.wait_count = 0;
 		context.wait_receive = false;
 	}
@@ -104,6 +120,8 @@ void meter_info::wait_requests(uint32_t timeout_ms) {
 		context.pcb = {};
 		context.connected = false;
 		context.request_close = false;
+		context.wait_receive = false;
+		context.state = e::state::IDLE;
 		if (!timeout)
 			name.fill(CONNECTING); // resetting name signals disconnected inverter
 	}
@@ -114,8 +132,8 @@ void meter_info::wait_requests(uint32_t timeout_ms) {
 // modbus logic functions ------------------------------------------------------------------------------
 static void request_modbus_registers(t::context &context, int offset, int registers);
 static void request_send(t::context &context, std::span<uint8_t> d);
-static void parse_modbus_frame(t::context &context, struct pbuf *&p);
-static void advance_context_state(t::context &context, struct pbuf *p) {
+static bool receive_modbus_bytes(t::context &context, struct pbuf *p);
+static void advance_context_state(t::context &context, bool received) {
 	e::state prev_state = context.state;
 	switch(context.state) {
 		case e::state::IDLE:
@@ -124,6 +142,7 @@ static void advance_context_state(t::context &context, struct pbuf *p) {
 		// Connection setup cases ---------------------------------------------------------
 		case e::state::CONNECTING:
 			context.connected = true;
+			context.wait_count = 0;
 			if (meter().name.sv() != CONNECTING && meter().name.sv() != NOT_CONNECTED) {
 				LogInfo("Connected to meter, got info already");
 				context.state = e::state::IDLE;
@@ -136,7 +155,6 @@ static void advance_context_state(t::context &context, struct pbuf *p) {
 			break;
 		case e::state::CHECK_SUNS: {
 			LogInfo("Checking sunspec id");
-			parse_modbus_frame(context, p);
 			std::string_view id = to_sv(context.modbus.storage.halfs_registers.sid);
 			LogInfo("Got id: {}", id);
 			if (id != "SunS") {
@@ -154,7 +172,6 @@ static void advance_context_state(t::context &context, struct pbuf *p) {
 		}
 		case e::state::FIND_COMMON_HDR: {
 			LogInfo("Meter searching common header");
-			parse_modbus_frame(context, p);
 			// dont use read to keep modbus swap for check
 			uint16_t id_common = context.modbus.storage.halfs_registers.id_common; 
 			uint16_t id_meter = context.modbus.storage.halfs_registers.id_meter;
@@ -178,19 +195,20 @@ static void advance_context_state(t::context &context, struct pbuf *p) {
 			break;
 		}
 		case e::state::WAIT_DATA_RESPONSE:
-			if (p)
-				parse_modbus_frame(context, p);
+			if (!received) // only use the power values when a response came in
+				break;
 			// parsing modbus infos back to power info
 			float w = context.modbus.read(&meter_registers::W);
 			meter().power_info.imp_w = std::max(w, .0f);
 			meter().power_info.exp_w = -std::min(w, .0f);
+			context.last_update_s = time_s();
 			LogInfo("Meter back to idle at: {}ms, {}W", time_ms(), w);
 			context.state = e::state::IDLE;
 			break;
 	}
 	if (context.state == e::state::IDLE)
 		context.wait_receive = false;
-	if (context.state == e::state::IDLE && prev_state != e::state::IDLE) // wakeup main task
+	if (context.state == e::state::IDLE && prev_state != e::state::IDLE && parent_task) // wakeup main task
 		xTaskNotifyGiveIndexed(parent_task, MAX_INVERTERS);
 }
 static void request_modbus_registers(t::context &context, int offset, int register_count) {
@@ -202,7 +220,9 @@ static void request_modbus_registers(t::context &context, int offset, int regist
 	request_send(context, res);
 }
 static void request_send(t::context &context, std::span<uint8_t> d) {
-	err_t error = tcp_write(context.pcb, d.data(), d.size(), 0);
+	// copy the data, the frame buffer is reused for the response
+	err_t error = tcp_write(context.pcb, d.data(), d.size(), TCP_WRITE_FLAG_COPY);
+	context.modbus.switch_to_response();
 	if (error != ERR_OK) {
 		LogError("Error sending modbus read frame {}", error);
 		return;
@@ -211,25 +231,18 @@ static void request_send(t::context &context, std::span<uint8_t> d) {
 	if (error != ERR_OK)
 		LogError("Error output modbus read frame {}", error);
 }
-static void parse_modbus_frame(t::context &context, struct pbuf *&p) {
-	if (!p) {
-		LogError("Cant parse modbus frame because its empty");
+// feeds the received bytes to the modbus parser, returns true if a full response frame was processed
+static bool receive_modbus_bytes(t::context &context, struct pbuf *p) {
+	bool frame_done{};
+	for (int i: range(p->tot_len)) {
+		std::string_view r = context.modbus.process_tcp(pbuf_get_at(p, i)).err;
+		if (r == IN_PROGRESS)
+			continue;
+		frame_done = true;
+		if (r != OK)
+			LogError("Modbus parsing failed with {}", r);
 	}
-	if (p->tot_len > 0) {
-		context.modbus.switch_to_response();
-		for (int i: range(p->tot_len)) {
-			// LogInfo("Res byte: {:x}", pbuf_get_at(p, i));
-			std::string_view r = context.modbus.process_tcp(pbuf_get_at(p, i)).err;
-			if (r == IN_PROGRESS)
-				continue;
-			if (r != OK) {
-				LogError("Modbus parsing failed with {}", r);
-				continue;
-			}
-		}
-	}
-	pbuf_free(p);
-	p = nullptr;
+	return frame_done;
 }
 
 // pcb handle functions --------------------------------------------------------------------------------
@@ -264,6 +277,8 @@ static err_t tcp_pcb_close(tcp_pcb *pcb) {
 	return err;
 }
 static err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err) {
+	if (!arg)
+		return ERR_OK;
 	t::context &self = (*(t::context*)arg);
 	self.pcb = tpcb;
 	self.pcb->so_options |= SOF_KEEPALIVE;
@@ -271,8 +286,29 @@ static err_t tcp_connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err) {
 	return ERR_OK;
 }
 static err_t tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+	if (!arg) {
+		if (p)
+			pbuf_free(p);
+		return ERR_OK;
+	}
 	t::context &self = (*(t::context*)arg);
-	advance_context_state(self, p);
+	if (!p) { // remote side closed the connection
+		LogWarning("Meter closed the connection");
+		err_t close_err = tcp_pcb_close(tpcb);
+		self.pcb = {};
+		self.connected = false;
+		self.wait_receive = false;
+		self.state = e::state::IDLE;
+		if (parent_task)
+			xTaskNotifyGiveIndexed(parent_task, MAX_INVERTERS);
+		return close_err;
+	}
+	tcp_recved(tpcb, p->tot_len);
+	// unexpected data (eg. a late answer after a timeout) is dropped
+	bool frame_done = self.state != e::state::IDLE && receive_modbus_bytes(self, p);
+	pbuf_free(p);
+	if (frame_done) // the response might be split accross multiple packets, only advance on a full frame
+		advance_context_state(self, true);
 	return ERR_OK;
 }
 static err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
@@ -280,9 +316,13 @@ static err_t tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
 }
 static void tcp_err_cb(void *arg, err_t err) {
 	LogInfo("Error callback: {}", err);
+	if (!arg)
+		return;
 	t::context &self = (*(t::context*)arg);
-	self.pcb = {};
+	self.pcb = {}; // pcb is already freed by lwip
 	self.connected = false;
+	self.wait_receive = false;
 	self.state = e::state::IDLE;
-	xTaskNotifyGiveIndexed(parent_task, MAX_INVERTERS);
+	if (parent_task)
+		xTaskNotifyGiveIndexed(parent_task, MAX_INVERTERS);
 }

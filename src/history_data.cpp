@@ -58,43 +58,40 @@ void write_any_data(int i, float value, time_t epoch_time_s) {
 
 static void add_data(t::device_data &locked_data, float value, time_t epoch_time_s) {
 	bool has_data = locked_data.per_second.size();
-	uint32_t prev_minute = locked_data.per_second[-1].time / 60;
-	std::optional<t::data_time> new_per_minute{};
+	uint32_t prev_second = locked_data.per_second[-1].time;
+	uint32_t prev_minute = prev_second / 60;
 	if (has_data && prev_minute != epoch_time_s / 60) { // new minute started
 		// calculate minute average of previous minute
 		float sum{};
 		int n{};
-		for (int i: range(60)) {
-			t::data_time dt = locked_data.per_second[-60 + i];
+		for (int i: range(std::min(60, locked_data.per_second.size()))) {
+			t::data_time dt = locked_data.per_second[-1 - i];
 			if (dt.time / 60 == prev_minute) {
 				sum += dt.data;
 				n += 1;
 			}
 		}
-		new_per_minute = {sum / n, prev_minute * 60};
+		if (n)
+			locked_data.per_minute.push({sum / n, prev_minute * 60});
 	}
 
-	has_data = locked_data.per_minute.size();
-	uint32_t prev_hour = locked_data.per_second[-1].time / 3600;
-	std::optional<t::data_time> new_per_hour{};
-	if (has_data && prev_hour != epoch_time_s / 3600) {
+	// the minute value of the last minute of the hour was pushed above, so it is included here
+	uint32_t prev_hour = prev_second / 3600;
+	if (has_data && locked_data.per_minute.size() && prev_hour != epoch_time_s / 3600) {
 		float sum{};
 		int n{};
-		for (int i: range(60)) {
-			t::data_time dt = locked_data.per_minute[-60 + i];
+		for (int i: range(std::min(60, locked_data.per_minute.size()))) {
+			t::data_time dt = locked_data.per_minute[-1 - i];
 			if (dt.time / 3600 == prev_hour) {
 				sum += dt.data;
 				n += 1;
 			}
 		}
-		new_per_hour = {sum / n, prev_hour * 3600};
+		if (n)
+			locked_data.per_hour.push({sum / n, prev_hour * 3600});
 	}
 
 	locked_data.per_second.push({value, uint32_t(epoch_time_s)});
-	if (new_per_minute)
-		locked_data.per_minute.push(new_per_minute.value());
-	if (new_per_hour)
-		locked_data.per_hour.push(new_per_hour.value());
 }
 
 } // namespace hd

@@ -38,14 +38,14 @@ struct static_string {
 	template<typename... Args>
 	constexpr int fill_formatted(std::format_string<Args...> fmt, Args&&... args) { 
 		auto info = std::format_to_n(storage.data(), storage.size(), fmt, std::forward<Args>(args)...); 
-		cur_size = info.size;
+		cur_size = std::min<int>(info.size, storage.size()); // info.size is the untruncated size
 		return cur_size;
 	}
 	template<typename... Args>
 	constexpr int append_formatted(std::format_string<Args...> fmt, Args&&... args) { 
 		int write_size = storage.size() - cur_size;
 		auto info = std::format_to_n(storage.data() + cur_size, write_size, fmt, std::forward<Args>(args)...); 
-		write_size = std::min(info.size, write_size); 
+		write_size = std::min<int>(info.size, write_size); 
 		cur_size += write_size;
 		return write_size;
 	}
@@ -75,7 +75,7 @@ struct static_vector {
 	constexpr T* push() { if (cur_size >= N) return {}; return storage.data() + cur_size++; }
 	constexpr bool push(const T& e) { if (cur_size == N) return false; storage[cur_size++] = e; return true; }
 	constexpr bool push(T&& e) { if (cur_size == N) return false; storage[cur_size++] = std::move(e); return true; }
-	constexpr T* pop() { cur_size -= 1; return cur_size >= 0 ? begin() + cur_size: nullptr; }
+	constexpr T* pop() { if (cur_size <= 0) return nullptr; return begin() + --cur_size; }
 	template<typename F>
 	constexpr void remove_if(F &&f) { for (int i = cur_size - 1; i >= 0; --i) if( f(storage[i]) ) { std::swap(storage[i], storage[cur_size - 1]); --cur_size; } }
 	constexpr void clear() { cur_size = 0; }
@@ -135,6 +135,6 @@ template<typename... Args>
 static int format_to_sv(std::string_view dest, std::format_string<Args...> fmt, Args&&... args) {
 	if (!dest.data())
 		return 0;
-	return std::format_to_n(const_cast<char*>(dest.data()), dest.size(), fmt, std::forward<Args>(args)...).size;
+	return std::min<int>(std::format_to_n(const_cast<char*>(dest.data()), dest.size(), fmt, std::forward<Args>(args)...).size, dest.size());
 }
 

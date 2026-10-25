@@ -16,6 +16,7 @@
 #define NTP_DELTA 2208988800 // seconds between 1 Jan 1900 and 1 Jan 1970
 #define NTP_TEST_TIME (30 * 1000)
 #define NTP_RESEND_TIME (10 * 1000)
+#define NTP_RESYNC_S (60 * 60)
 
 struct ntp_client {
 	static ntp_client& Default() { // avoids any stack allocations which means stack can stay as small as possible
@@ -29,6 +30,7 @@ struct ntp_client {
 	alarm_id_t ntp_resend_alarm{};
 	time_t ntp_time{};
 	time_t local_time{};
+	uint32_t last_request_s{};
 
 	bool synched() const { return ntp_time; }
 	void update_time();

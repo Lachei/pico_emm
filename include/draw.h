@@ -148,7 +148,7 @@ struct EmmPage {
 
 struct IpButton {
 	Button button;
-	static_string<4> str{};
+	static_string<6> str{}; // ports need up to 5 digits
 };
 struct settings;
 struct runtime_state;
@@ -196,7 +196,7 @@ struct PwdButton {
 	static_string<64> pwd{};
 	Button button;
 };
-constexpr std::string_view KEYBOARD_CHARS{"!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ"};
+constexpr std::string_view KEYBOARD_CHARS{"!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_{|}~"};
 struct WifiPage {
 	float base_offset{960};
 	Button shift{{10, 220, 35, 15}, "^Shift"};

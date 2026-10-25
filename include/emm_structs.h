@@ -8,7 +8,7 @@ struct ModbusTcpAddr {
     uint16_t port{};
     uint8_t modbus_id{};
 
-    bool operator<=>(const ModbusTcpAddr &o) const = default;
+    bool operator==(const ModbusTcpAddr &o) const = default;
 };
 
 struct PowerInfo {

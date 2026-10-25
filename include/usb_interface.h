@@ -34,10 +34,9 @@ static constexpr inline void handle_usb_command(std::istream &in = std::cin, std
 		out << "  status\n";
 		out << "    Prints the status of the iot device, including measurement values, setting values, error state, wifi status\n\n";
 		out << "  set ${variable} ${value}\n";
-		out << "    Set the value of a variable. Available variables are:\n";
-		out << "      Variable1\n";
-		out << "      Variable2\n";
-		out << "      Variable3\n\n";
+		out << "    Set the value of a variable and store the settings. Available variables are:\n";
+		out << "      configure_inverter a.b.c.d:port|modbus_id\n";
+		out << "      configure_meter a.b.c.d:port|modbus_id\n\n";
 		out << "  enable_wifi|ew\n";
 		out << "    Activate wifi on the device\n\n";
 		out << "  disable_wifi|dw\n";
@@ -78,6 +77,10 @@ static constexpr inline void handle_usb_command(std::istream &in = std::cin, std
 		in >> settings::Default(); // sets fail bit on error
 		if (!in)
 			out << "Error at setting the value\n";
+		else {
+			settings::Default().sanitize();
+			request_settings_store = true;
+		}
 		in.clear();
 	} else if (command == "enable_wifi" || command == "ew") {
 		cyw43_arch_enable_sta_mode();
@@ -91,7 +94,9 @@ static constexpr inline void handle_usb_command(std::istream &in = std::cin, std
 		std::string ssid, pwd;
 		in >> ssid >> pwd;
 		wifi_storage::Default().ssid_wifi.fill(ssid);
+		wifi_storage::Default().ssid_wifi.make_c_str_safe();
 		wifi_storage::Default().pwd_wifi.fill(pwd);
+		wifi_storage::Default().pwd_wifi.make_c_str_safe();
 		wifi_storage::Default().wifi_connected = false;
 		wifi_storage::Default().wifi_changed = true;
 		if (PICO_OK != persistent_storage_t::Default().write(

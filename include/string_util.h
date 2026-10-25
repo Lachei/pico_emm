@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string_view>
+#include <optional>
 
 /** @brief Extract a word from the beginning of content, never reading over newlines.
  * Also removes any whitespace in the returned word and in the changed content. */

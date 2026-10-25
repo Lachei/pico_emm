@@ -1,6 +1,8 @@
 #pragma once
 
 #include <span>
+#include <cmath>
+#include <cstdlib>
 
 #include "static_types.h"
 #include "tcp_server/tcp_server.h"
@@ -10,8 +12,9 @@
 #include "persistent_storage.h"
 #include "crypto_storage.h"
 #include "ntp_client.h"
+#include "settings.h"
 
-using tcp_server_typed = tcp_server<12, 5, 2, 0>;
+using tcp_server_typed = tcp_server<13, 6, 2, 0>;
 tcp_server_typed& Webserver() {
 	const auto static_page_callback = [] (std::string_view page, std::string_view status, std::string_view type = "text/html") {
 		return [page, status, type](const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res){
@@ -196,6 +199,30 @@ tcp_server_typed& Webserver() {
 		res.res_add_header("Content-Length", "0");
 		res.res_write_body();
 	};
+	const auto get_max_export = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		std::string_view response = static_format<16>("{}", settings::Default().max_export);
+		res.res_set_status_line(HTTP_VERSION, STATUS_OK);
+		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");
+		res.res_add_header("Content-Type", "text/plain");
+		res.res_add_header("Content-Length", static_format<8>("{}", response.size()));
+		res.res_write_body(response);
+	};
+	const auto set_max_export = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		// body is the maximum grid export in W, the request buffer is 0 terminated
+		char *end{};
+		float max_export = strtof(req.body.data(), &end);
+		bool valid = end != req.body.data() && std::isfinite(max_export) && max_export >= 0;
+		res.res_set_status_line(HTTP_VERSION, valid ? STATUS_OK: STATUS_BAD_REQUEST);
+		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");
+		res.res_add_header("Content-Length", "0");
+		res.res_write_body();
+		if (!valid) {
+			LogError("Invalid max export value");
+			return;
+		}
+		settings::Default().max_export = max_export;
+		request_settings_store = true;
+	};
 	static tcp_server_typed webserver{
 		.port = 80,
 		.default_endpoint_cb = static_page_callback(_404_HTML, STATUS_NOT_FOUND),
@@ -209,6 +236,8 @@ tcp_server_typed& Webserver() {
 			tcp_server_typed::endpoint{{.path_match = true}, "/user", get_user},
 			// time endpoint
 			tcp_server_typed::endpoint{{.path_match = true}, "/time", get_time},
+			// emm endpoints
+			tcp_server_typed::endpoint{{.path_match = true}, "/max_export", get_max_export},
 			// static file serve endpoints
 			tcp_server_typed::endpoint{{.path_match = true}, "/", static_page_callback(INDEX_HTML, STATUS_OK)},
 			tcp_server_typed::endpoint{{.path_match = true}, "/index.html", static_page_callback(INDEX_HTML, STATUS_OK)},
@@ -223,6 +252,7 @@ tcp_server_typed& Webserver() {
 			tcp_server_typed::endpoint{{.path_match = true}, "/ap_active", set_ap_active},
 			tcp_server_typed::endpoint{{.path_match = true}, "/wifi_connect", connect_to_wifi},
 			tcp_server_typed::endpoint{{.path_match = true}, "/login", post_login},
+			tcp_server_typed::endpoint{{.path_match = true}, "/max_export", set_max_export},
 		},
 		.put_endpoints = {
 			tcp_server_typed::endpoint{{.path_match = true}, "/set_password", set_password},

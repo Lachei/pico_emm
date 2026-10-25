@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iostream>
+#include <cmath>
 
 #include "AppConfig.h"
 #include "static_types.h"
@@ -31,17 +32,19 @@ struct settings {
 	constexpr void dump_to_json(static_string<N> &s) const {
 		s.append(R"({"configured_ips":[)");
 		for (int i: range(configured_inverters.size())) {
-			ModbusTcpAddr &a = configured_inverters[i];
+			const ModbusTcpAddr &a = configured_inverters[i];
 			if (i != 0)
 				s.append(',');
 			print_ip(s, a.ip, a.port, a.modbus_id);
 		}
 		s.append(R"(],"configured_meter":)");
-		print_ip(s, configured_meter);
+		print_ip(s, configured_meter.ip, configured_meter.port, configured_meter.modbus_id);
 		s.append("}");
 	}
 
 	constexpr void sanitize() { 
+		if (!(max_export >= 0) || std::isinf(max_export)) // also catches nan from uninitialized flash
+			max_export = 0;
 		configured_inverters.sanitize(); 
 		inverter_bat_prio.sanitize();
 		if (inverter_bat_prio.size() < configured_inverters.size())
@@ -69,13 +72,15 @@ inline std::ostream& operator<<(std::ostream &os, const settings &s) {
 
 /** @brief parses a single key, value pair from the istream */
 inline std::istream& operator>>(std::istream &is, settings &s) {
+	// expected format: a.b.c.d:port|modbus_id
 	const auto parse_ip = [](std::string_view ip, ModbusTcpAddr &conf_ip) {
+		conf_ip = {};
+		std::string_view host = extract_word(ip, ':'); // ip is now port|modbus_id
 		std::string_view cur;
-		for (int shift = 24; extract_word(ip, cur, '.') && shift >= 0; shift -= 8)
-			conf_ip.ip |= to_int(cur).value_or(0) << shift;
-		// cur is now port|modbus_id
-		conf_ip.port = to_int(extract_word(cur, '|')).value_or(0);
-		conf_ip.modbus_id = to_int(cur).value_or(0);
+		for (int shift = 24; shift >= 0 && extract_word(host, cur, '.'); shift -= 8)
+			conf_ip.ip |= uint32_t(std::clamp(to_int(cur).value_or(0), 0, 255)) << shift;
+		conf_ip.port = std::clamp(to_int(extract_word(ip, '|')).value_or(0), 0, 0xffff);
+		conf_ip.modbus_id = std::clamp(to_int(ip).value_or(0), 0, 255);
 	};
 	std::string key;
 	std::string ip;
@@ -85,10 +90,8 @@ inline std::istream& operator>>(std::istream &is, settings &s) {
 		ModbusTcpAddr *conf_ip = s.configured_inverters.push();
 		if (!conf_ip)
 			is.setstate(std::ios_base::failbit);
-		else {
-			*conf_ip = {};
+		else
 			parse_ip(ip, *conf_ip);
-		}
 	} else if (key == "configure_meter") {
 		is >> ip;
 		parse_ip(ip, s.configured_meter);

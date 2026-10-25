@@ -16,6 +16,8 @@ inline bool request_store_wifi{false};
 
 struct wifi_storage {
 	static constexpr uint32_t DISCOVER_TIMEOUT_US = 6e6; // 6 seconds
+	// scanning takes the radio off channel, which delays all traffic, so when connected scan only rarely
+	static constexpr uint32_t CONNECTED_SCAN_INTERVAL_S = 30;
 
 	struct wifi_info {
 		static_string<256> ssid{};
@@ -54,6 +56,7 @@ struct wifi_storage {
 		if (hostname_inited)
 			dhcp_start(nif);
 		cyw43_arch_lwip_end();
+		cyw43_arch_lwip_begin();
 		if (!hostname_inited) {
 			mdns_resp_init(); 
 			mdns_resp_add_netif(&cyw43_state.netif[CYW43_ITF_STA], hostname.data());
@@ -61,6 +64,7 @@ struct wifi_storage {
 		} else {
 			mdns_resp_rename_netif(&cyw43_state.netif[CYW43_ITF_STA], hostname.data());
 		}
+		cyw43_arch_lwip_end();
 		
 		hostname_inited = true;
 		hostname_changed = false;
@@ -89,7 +93,9 @@ struct wifi_storage {
 	
 	void update_scanned() {
 		uint32_t cur = time_us_64() / 1000000;
-		if (cyw43_wifi_scan_active(&cyw43_state) && last_scanned - cur < 10) // after 10 seconds forces rediscover
+		if (cyw43_wifi_scan_active(&cyw43_state) && cur - last_scanned < 10) // after 10 seconds forces rediscover
+			return;
+		if (wifi_connected && last_scanned && cur - last_scanned < CONNECTED_SCAN_INTERVAL_S)
 			return;
 		vTaskDelay(pdMS_TO_TICKS(500)); // avoid back to back scanning
 		last_scanned = cur;
@@ -99,9 +105,10 @@ struct wifi_storage {
 			return;
 		}
 
-		// remove old wifis
+		// remove old wifis (when connected the scans are rarer, so they have to be kept longer)
 		uint64_t cur_us = time_us_64();
-		wifis.remove_if([cur_us](const auto &e){ return cur_us - e.last_seen_us > DISCOVER_TIMEOUT_US; });
+		uint64_t timeout_us = DISCOVER_TIMEOUT_US + (wifi_connected ? 2 * CONNECTED_SCAN_INTERVAL_S * 1000000ull: 0);
+		wifis.remove_if([cur_us, timeout_us](const auto &e){ return cur_us - e.last_seen_us > timeout_us; });
 	}
 
 	void write_to_persistent_storage() {

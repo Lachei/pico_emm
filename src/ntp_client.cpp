@@ -1,4 +1,5 @@
 #include "pico/time.h"
+#include "pico/cyw43_arch.h"
 
 #include "ntp_client.h"
 #include "log_storage.h"
@@ -15,6 +16,10 @@ static int64_t ntp_failed_handler(alarm_id_t id, void *user_data);
 
 static void ntp_request(ntp_client *state) {
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, NTP_MSG_LEN, PBUF_RAM);
+    if (!p) {
+        LogError("Failed to allocate ntp request");
+        return;
+    }
     uint8_t *req = (uint8_t *) p->payload;
     memset(req, 0, NTP_MSG_LEN);
     req[0] = 0x1b;
@@ -41,7 +46,7 @@ static void ntp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_ad
         state->local_time = time_us_64() / 1000000u;
         uint8_t seconds_buf[4] = {0};
         pbuf_copy_partial(p, seconds_buf, sizeof(seconds_buf), 40);
-        time_t seconds_since_1900 = seconds_buf[0] << 24 | seconds_buf[1] << 16 | seconds_buf[2] << 8 | seconds_buf[3];
+        time_t seconds_since_1900 = uint32_t(seconds_buf[0]) << 24 | uint32_t(seconds_buf[1]) << 16 | uint32_t(seconds_buf[2]) << 8 | seconds_buf[3];
         if (seconds_since_1900 < NTP_DELTA)
             seconds_since_1900 += (time_t(1) << 32);
         time_t seconds_since_1970 = seconds_since_1900 - NTP_DELTA;
@@ -76,16 +81,24 @@ static void ntp_dns_found(const char *hostname, const ip_addr_t *ipaddr, void *a
 }
 
 void ntp_client::update_time() {
+    // only resync periodically, while not synched retry more often
+    uint32_t now_s = time_us_64() / 1000000u;
+    uint32_t interval_s = synched() ? NTP_RESYNC_S: NTP_RESEND_TIME / 1000;
+    if (last_request_s && now_s - last_request_s < interval_s)
+        return;
+    last_request_s = now_s;
+
+    cyw43_arch_lwip_begin();
     if (!ntp_pcb)
         ntp_init(*this);
-    if (!ntp_pcb)
-        return;
-
-    int err = dns_gethostbyname(NTP_SERVER, &ntp_server_address, ntp_dns_found, this);
-    if (err != ERR_OK) {
-        LogError("Failed to resolve ntp hostname");
-        return;
+    if (ntp_pcb) {
+        int err = dns_gethostbyname(NTP_SERVER, &ntp_server_address, ntp_dns_found, this);
+        if (err == ERR_OK) // address was cached, callback is not called
+            ntp_request(this);
+        else if (err != ERR_INPROGRESS)
+            LogError("Failed to resolve ntp hostname");
     }
+    cyw43_arch_lwip_end();
 }
 
 time_t ntp_client::get_time_since_epoch() const {

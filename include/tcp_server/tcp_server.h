@@ -2,8 +2,11 @@
 
 #include <functional>
 #include <atomic>
+#include <algorithm>
+#include <cctype>
 
 #include "string_util.h"
+#include "ranges_util.h"
 #include "static_types.h"
 
 #include "lwip/pbuf.h"
@@ -125,7 +128,7 @@ struct tcp_server {
 	int recv_len{};
 	int run_count{};
 
-	void process_request(uint32_t recieve_buffer_idx, struct tcp_pcb *client);
+	err_t process_request(uint32_t recieve_buffer_idx, struct tcp_pcb *client);
 	err_t send_data(std::string_view data, struct tcp_pcb *client);
 };
 
@@ -154,6 +157,45 @@ constexpr static err_t clear_client_pcb(std::atomic<struct tcp_pcb*> &pcb) {
 
 }
 
+/** @brief closes the client in slot i and frees its recieve buffer, the pcb in the slot has to be still valid */
+template template_args
+static err_t close_client(tcp_server template_args_pure &server, int i) {
+	err_t err{ERR_OK};
+	if (server.client_pcbs[i] != nullptr)
+		err = clear_client_pcb(server.client_pcbs[i]);
+	server.recieve_buffers[i].clear();
+	return err;
+}
+
+/** @brief the client callbacks get the recieve buffer of their slot as argument, this gets the slot index */
+template template_args
+static int client_slot(void *arg) {
+	auto &buffer = *reinterpret_cast<typename tcp_server template_args_pure::message_buffer*>(arg);
+	return &buffer - buffer.parent_server->recieve_buffers.data();
+}
+
+/** @brief checks if the full http request (headers and body according to Content-Length) was recieved */
+inline bool http_request_complete(std::string_view r) {
+	size_t hdr_end = r.find("\r\n\r\n");
+	if (hdr_end == std::string_view::npos)
+		return false;
+	constexpr std::string_view content_length_key{"content-length:"};
+	int content_length{};
+	for (size_t line = 0; line < hdr_end;) {
+		size_t line_end = r.find("\r\n", line);
+		std::string_view l = r.substr(line, line_end - line);
+		if (l.size() > content_length_key.size() &&
+		    std::equal(content_length_key.begin(), content_length_key.end(), l.begin(), [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); })) {
+			std::string_view value = l.substr(content_length_key.size());
+			for (; value.size() && value.front() == ' '; value.remove_prefix(1));
+			for (; value.size() && value.back() == ' '; value.remove_suffix(1));
+			content_length = to_int(value).value_or(0);
+		}
+		line = line_end + 2;
+	}
+	return int(r.size() - (hdr_end + 4)) >= content_length;
+}
+
 template template_args
 constexpr static err_t tcp_server_result(void *arg, int status, struct tcp_pcb *client) {
 	tcp_server template_args_pure& server = reinterpret_cast<tcp_server template_args_pure&>(*(char*)arg);
@@ -163,10 +205,10 @@ constexpr static err_t tcp_server_result(void *arg, int status, struct tcp_pcb *
 	}
 	LogWarning("Server failed {}, deinitializing {}", status, client ? "one client": "no client");
 	err_t err = ERR_OK;
-	for (auto &pcb: server.client_pcbs) {
-		if (pcb == nullptr || (client && pcb != client))
+	for (int i: range(server.client_pcbs.size())) {
+		if (server.client_pcbs[i] == nullptr || (client && server.client_pcbs[i] != client))
 			continue;
-		err = clear_client_pcb(pcb);
+		err = close_client(server, i);
 	}
 	return err;
 }
@@ -179,71 +221,74 @@ constexpr static err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t le
 
 template template_args
 constexpr static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
-	if (!p || !arg) {
+	if (!arg) {
 		LogError("tcp_server_recv() failed");
-		return tcp_server_result template_args_pure(arg, -1, tpcb);
+		if (p)
+			pbuf_free(p);
+		return ERR_OK;
 	}
-	tcp_server template_args_pure& server = reinterpret_cast<tcp_server template_args_pure&>(*(char*)arg);
-	if (p->tot_len > buf_size)
+	auto &buffer = *reinterpret_cast<typename tcp_server template_args_pure::message_buffer*>(arg);
+	tcp_server template_args_pure& server = *buffer.parent_server;
+	int slot = client_slot template_args_pure(arg);
+	if (!p) // client closed the connection
+		return close_client(server, slot);
+	tcp_recved(tpcb, p->tot_len);
+	err_t res{ERR_OK};
+	if (buffer.buffer.size() + p->tot_len > buf_size - 1) { // 1 byte reserved for the terminating 0
 		LogError("Message too big, could not recieve");
-	else if (p->tot_len > 0) {
-		// Receive the buffer
-		int recieve_buffer{-1};
-		bool recieve_success{};
-		for (auto &buffer: server.recieve_buffers) {
-			++recieve_buffer;
-			if (buffer.used.exchange(true))
-				continue;
-			buffer.buffer.set_size(pbuf_copy_partial(p, buffer.buffer.data(), p->tot_len, 0));
-			server.process_request(recieve_buffer, tpcb);
-			recieve_success = true;
-			break;
-		}
-		if (!recieve_success)
-			LogError("Could not recieve message, no free recieve buffer");
+		buffer.buffer.clear();
+	} else if (p->tot_len > 0) {
+		// the request might be split accross multiple packets, collect until it is complete
+		buffer.buffer.set_size(buffer.buffer.size() + pbuf_copy_partial(p, buffer.buffer.data() + buffer.buffer.size(), p->tot_len, 0));
+		if (http_request_complete(buffer.buffer.sv()))
+			res = server.process_request(slot, tpcb);
 	}
 	pbuf_free(p);
-	return ERR_OK;
+	return res == ERR_ABRT ? ERR_ABRT: ERR_OK;
 }
 
 template template_args
 constexpr static err_t tcp_server_poll(void *arg, struct tcp_pcb *tpcb) {
 	// remove connections that are not anymore valid
 	LogInfo("tcp_server_poll_fn");
-	return tcp_server_result template_args_pure(arg, -1, tpcb); // on no response remove the client to free up space
+	if (!arg)
+		return ERR_OK;
+	auto &buffer = *reinterpret_cast<typename tcp_server template_args_pure::message_buffer*>(arg);
+	return close_client(*buffer.parent_server, client_slot template_args_pure(arg)); // on no response remove the client to free up space
 }
 
 template template_args
 constexpr static void tcp_server_err(void *arg, err_t err) {
 	LogError("tcp_server_err {}", err);
-	if (err != ERR_ABRT) {
-		LogError("tcp_client_err_fn {}", err);
-		tcp_server_result template_args_pure(arg, err, nullptr);
-	}
+	if (!arg)
+		return;
+	// the pcb is already freed by lwip, only free the slot
+	auto &buffer = *reinterpret_cast<typename tcp_server template_args_pure::message_buffer*>(arg);
+	int slot = client_slot template_args_pure(arg);
+	buffer.parent_server->client_pcbs[slot] = nullptr;
+	buffer.clear();
 }
 
 template template_args
 constexpr static err_t tcp_server_accept (void *arg, struct tcp_pcb *client_pcb, err_t err) {
 	if (err != ERR_OK || client_pcb == NULL || arg == NULL) {
 		LogError("Failure in accept");
-		tcp_server_result template_args_pure(arg, err, nullptr);
 		return ERR_VAL;
 	}
 
 	tcp_server template_args_pure& server = reinterpret_cast<tcp_server template_args_pure&>(*(char*)arg);
 	
 	// search for empty slot and assing it a new value
-	bool found_empty_spot{};
-	int i{};
-	for (auto &pcb: server.client_pcbs) {
-		++i;
+	int slot{-1};
+	for (int i: range(server.client_pcbs.size())) {
 		struct tcp_pcb *null{}; // should be nullptr
-		found_empty_spot |= pcb.compare_exchange_strong(null, client_pcb);
-		if (found_empty_spot)
+		if (server.client_pcbs[i].compare_exchange_strong(null, client_pcb)) {
+			slot = i;
 			break;
+		}
 	}
 
-	if (!found_empty_spot) {
+	if (slot == -1) {
 		LogError("All clients already connected, refusing");
 		err = tcp_close(client_pcb);
 		if (err != ERR_OK) {
@@ -254,9 +299,12 @@ constexpr static err_t tcp_server_accept (void *arg, struct tcp_pcb *client_pcb,
 		return err;
 	}
 
-	LogInfo("Client connected on id {}, setting up callbacks", i);
+	LogInfo("Client connected on id {}, setting up callbacks", slot);
+	auto &buffer = server.recieve_buffers[slot];
+	buffer.clear();
+	buffer.parent_server = &server;
 	
-	tcp_arg(client_pcb, arg);
+	tcp_arg(client_pcb, &buffer);
 	tcp_sent(client_pcb, tcp_server_sent template_args_pure);
 	tcp_recv(client_pcb, tcp_server_recv template_args_pure);
 	tcp_poll(client_pcb, tcp_server_poll template_args_pure, server.poll_time_s * 2);
@@ -408,9 +456,9 @@ template template_args
 err_t tcp_server template_args_pure::stop() {
 	err_t err = ERR_OK;
 	for (auto &client_pcb: client_pcbs) {
-		if (client_pcb = nullptr) 
+		if (client_pcb == nullptr) 
 			continue;
-		clear_client_pcb(client_pcb);
+		tcp_server_internal::clear_client_pcb(client_pcb);
 	}
 	if (server_pcb) {
 		tcp_arg(server_pcb, NULL);
@@ -423,10 +471,10 @@ err_t tcp_server template_args_pure::stop() {
 
 
 template template_args
-void tcp_server template_args_pure::process_request(uint32_t recieve_buffer_idx, struct tcp_pcb *client) {
+err_t tcp_server template_args_pure::process_request(uint32_t recieve_buffer_idx, struct tcp_pcb *client) {
 	if (recieve_buffer_idx >= recieve_buffers.size()) {
 		LogError("Impossible recieve buffer idx");
-		return;
+		return ERR_OK;
 	}
 	auto &recieve_buffer = recieve_buffers[recieve_buffer_idx];
 
@@ -435,8 +483,8 @@ void tcp_server template_args_pure::process_request(uint32_t recieve_buffer_idx,
 	for (; (uint32_t)free_send_idx < send_buffers.size() && send_buffers[free_send_idx].used.exchange(true) ; ++free_send_idx);
 	if ((uint32_t)free_send_idx >= send_buffers.size()) {
 		LogError("No free buffer for sending found, dropping request");
-		recieve_buffer.clear();
-		return;
+		recieve_buffer.buffer.clear();
+		return ERR_OK;
 	}
 
 	auto &send_buffer = send_buffers[free_send_idx];
@@ -467,9 +515,13 @@ void tcp_server template_args_pure::process_request(uint32_t recieve_buffer_idx,
 	else
 		default_endpoint_cb(recieve_buffer, send_buffer);
 
-	send_data(send_buffer.buffer.sv(), client);
-	recieve_buffer.clear();
+	err_t err = send_data(send_buffer.buffer.sv(), client);
+	// only reset the data, the buffer stays assigned to the client
+	recieve_buffer.buffer.clear();
+	recieve_buffer.headers_view.headers.clear();
+	recieve_buffer.method = recieve_buffer.path = recieve_buffer.http_version = recieve_buffer.body = {};
 	send_buffer.clear();
+	return err;
 }
 
 template template_args
@@ -478,7 +530,8 @@ err_t tcp_server template_args_pure::send_data(std::string_view data, struct tcp
 	while (data.size()) {
 		uint32_t free_space = std::min<uint32_t>(tcp_sndbuf(client), data.size());
 
-		err_t err = tcp_write(client, data.data(), free_space, 0);
+		// copy the data as the buffer is reused directly after this call (lwip might still need it for retransmission)
+		err_t err = free_space ? tcp_write(client, data.data(), free_space, TCP_WRITE_FLAG_COPY): ERR_MEM;
 		if (err != ERR_OK) {
 			LogWarning("Failed to write data {}, retries left {}", err, retry);
 			if (--retry > 0) {

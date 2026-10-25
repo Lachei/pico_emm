@@ -3,6 +3,9 @@
 <head><meta charset="utf-8"></head>
 <body>
 <h3>Einstellungen</h3>
+<h4>Energiemanagement</h4>
+<p><label for="me">Maximale Einspeisung ins Netz (W):</label> <input id="me" type="number" min="0" step="1" style="width:6rem"> <button onclick="sme();">Setzen</button>
+<p><pre id="mee" class="er d">Ungültiger Wert</pre>
 <h4>Passwort ändern</h4>
 <p><input id="pw1" type="password"><label for="pw1">Passwort eingeben</label>
 <p><input id="pw2" type="password"><label for="pw2">Passwort wiederholen</label>
@@ -14,6 +17,11 @@ var d=document;
 var pw1=d.getElementById("pw1");
 var pw2=d.getElementById("pw2");
 var e=d.getElementById("e");
+var me=d.getElementById("me");
+var mee=d.getElementById("mee");
+const gme=async()=>{if(me==d.activeElement)return;try{me.value=parseFloat(await (await fetch("max_export")).text());}catch(x){}};
+const sme=async()=>{let v=parseFloat(me.value);if(!(v>=0)){mee.classList.remove("d");return;}let r=await fetch("max_export",{method:"POST",body:String(v)});if(r.ok)mee.classList.add("d");else mee.classList.remove("d");await gme();};
+window.onload=()=>{parent.m["e"]=gme;gme();};
 const sp=async()=>{if(pw1.value!=pw2.value)e.classList.remove("d");else {e.classList.add("d");await fetch("set_password",{method:"PUT",body:pw1.value});pw1.value=pw2.value="";}};
 </script>
 </html>
