@@ -36,7 +36,8 @@ static constexpr inline void handle_usb_command(std::istream &in = std::cin, std
 		out << "  set ${variable} ${value}\n";
 		out << "    Set the value of a variable and store the settings. Available variables are:\n";
 		out << "      configure_inverter a.b.c.d:port|modbus_id\n";
-		out << "      configure_meter a.b.c.d:port|modbus_id\n\n";
+		out << "      configure_meter a.b.c.d:port|modbus_id (0.0.0.0:0|0 removes the meter)\n";
+		out << "      inverter_prio ${inverter_index} ${priority} (>= 1, the higher the more the battery is kept full)\n\n";
 		out << "  enable_wifi|ew\n";
 		out << "    Activate wifi on the device\n\n";
 		out << "  disable_wifi|dw\n";

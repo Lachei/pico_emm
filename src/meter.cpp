@@ -16,7 +16,8 @@
 using namespace libmodbus_static;
 using namespace g;
 
-#define ASSERT_OK_RETURN(status) {std::string_view s = status; if ((s) != OK) {LogError(s); return;}}
+#define ASSERT_OK_FAIL(status) {std::string_view s = status; if ((s) != OK) {LogError(s); context.request_failed = true; return;}}
+#define ASSERT_OK_FAIL_BREAK(status) {std::string_view s = status; if ((s) != OK) {LogError(s); context.request_failed = true; break;}}
 
 namespace e {
 enum class state {IDLE, CONNECTING, CHECK_SUNS, FIND_COMMON_HDR, FETCH_DATA, WAIT_DATA_RESPONSE};
@@ -28,6 +29,7 @@ struct context {
 	bool connected{};
 	bool wait_receive{};
 	bool request_close{};
+	bool request_failed{}; // set if a request could not be sent, the state machine then goes back to idle
 	int wait_count{};
 	int tcp_frame{};
 	uint32_t last_update_s{};
@@ -60,11 +62,14 @@ void meter_info::initiate_discover(ModbusTcpAddr address) {
 		context.connected = context.wait_receive = context.request_close = false;
 		context.state = e::state::IDLE;
 		context.wait_count = 0;
-		name.fill(CONNECTING);
+		context.request_failed = false;
+		name.fill(address == ModbusTcpAddr{} ? NOT_CONNECTED: CONNECTING);
 		power_info.imp_w = power_info.exp_w = 0;
 	}
 	addr = address;
 	power_info.device_id = METER_ID;
+	if (addr == ModbusTcpAddr{}) // no meter configured (anymore)
+		return;
 	if (!context.pcb) {
 		cyw43_arch_lwip_begin();
 		init_pcb(context);
@@ -164,9 +169,9 @@ static void advance_context_state(t::context &context, bool received) {
 			}
 			context.state = e::state::FIND_COMMON_HDR;
 			context.modbus.switch_to_request();
-			ASSERT_OK_RETURN(context.modbus.start_tcp_frame(context.tcp_frame++, meter().addr.modbus_id));
+			ASSERT_OK_FAIL_BREAK(context.modbus.start_tcp_frame(context.tcp_frame++, meter().addr.modbus_id));
 			auto [res, err] = context.modbus.get_frame_read(&meter_registers::id_common, &meter_registers::id_meter);
-			ASSERT_OK_RETURN(err);
+			ASSERT_OK_FAIL_BREAK(err);
 			request_send(context, res);
 			break;
 		}
@@ -188,9 +193,9 @@ static void advance_context_state(t::context &context, bool received) {
 			LogInfo("Meter starting to fetch data, {}ms", time_ms());
 			context.state = e::state::WAIT_DATA_RESPONSE;
 			context.modbus.switch_to_request();
-			ASSERT_OK_RETURN(context.modbus.start_tcp_frame(context.tcp_frame++, meter().addr.modbus_id));
+			ASSERT_OK_FAIL_BREAK(context.modbus.start_tcp_frame(context.tcp_frame++, meter().addr.modbus_id));
 			auto [res, err] = context.modbus.get_frame_read(&meter_registers::A, &meter_registers::TotWhImpPhC);
-			ASSERT_OK_RETURN(err);
+			ASSERT_OK_FAIL_BREAK(err);
 			request_send(context, res);
 			break;
 		}
@@ -206,6 +211,14 @@ static void advance_context_state(t::context &context, bool received) {
 			context.state = e::state::IDLE;
 			break;
 	}
+	if (context.request_failed) {
+		// no request went out, so no response will come: do not wait for it
+		context.request_failed = false;
+		if (prev_state == e::state::CONNECTING || prev_state == e::state::CHECK_SUNS)
+			context.request_close = true; // incomplete discovery, reconnect
+		LogError("Meter request failed in state {}, back to idle", int(prev_state));
+		context.state = e::state::IDLE;
+	}
 	if (context.state == e::state::IDLE)
 		context.wait_receive = false;
 	if (context.state == e::state::IDLE && prev_state != e::state::IDLE && parent_task) // wakeup main task
@@ -214,9 +227,9 @@ static void advance_context_state(t::context &context, bool received) {
 static void request_modbus_registers(t::context &context, int offset, int register_count) {
 	// LogInfo("Getting registers {}-{}", offset, offset + register_count);
 	context.modbus.switch_to_request();
-	ASSERT_OK_RETURN(context.modbus.start_tcp_frame(context.tcp_frame++, meter().addr.modbus_id));
+	ASSERT_OK_FAIL(context.modbus.start_tcp_frame(context.tcp_frame++, meter().addr.modbus_id));
 	auto [res, err] = context.modbus.get_frame_read(libmodbus_static::register_t::HALFS, offset, register_count);
-	ASSERT_OK_RETURN(err);
+	ASSERT_OK_FAIL(err);
 	request_send(context, res);
 }
 static void request_send(t::context &context, std::span<uint8_t> d) {
@@ -225,6 +238,7 @@ static void request_send(t::context &context, std::span<uint8_t> d) {
 	context.modbus.switch_to_response();
 	if (error != ERR_OK) {
 		LogError("Error sending modbus read frame {}", error);
+		context.request_failed = true;
 		return;
 	}
 	error = tcp_output(context.pcb);

@@ -744,10 +744,18 @@ void EmmPage::draw(Draw &draw, TimeInfo time_info, float x_off, EMM &emm, std::s
 	    x_offset + 239 <= 0)
 		return;
 
+	// the button state always shows the emm state (which is loaded from the persistent settings)
+	// changes are written back to the settings and stored
+	const auto set_checkbox = [](Button &b, bool checked) {
+		b.style = checked ? ButtonStyle::BORDER: ButtonStyle::DEFAULT;
+		b.text = checked ? "X": "";
+	};
+	settings &s = settings::Default();
+	set_checkbox(invert_meter, emm.invert_home);
 	if (invert_meter(draw, x_offset)) {
-		invert_meter.style = invert_meter.style == ButtonStyle::DEFAULT ? ButtonStyle::BORDER: ButtonStyle::DEFAULT;
-		invert_meter.text = invert_meter.style == ButtonStyle::DEFAULT ? "" : "X";
-		emm.invert_home = invert_meter.style == ButtonStyle::BORDER;
+		emm.invert_home = !emm.invert_home;
+		s.invert_home = emm.invert_home;
+		request_settings_store = true;
 	}
 	draw.set_pen(0);
 	draw.text("Hausleistung invert:", {10 + x_offset, 34}, 150, 1);
@@ -755,30 +763,57 @@ void EmmPage::draw(Draw &draw, TimeInfo time_info, float x_off, EMM &emm, std::s
 	draw.line({105 + x_offset, 56}, {205 + x_offset, 56});
 	int x_sens = std::lerp(113., 200., emm.filter_alpha) + x_offset;
 	draw.line({x_sens, 50}, {x_sens, 63});
-	if (faster_home_adopt(draw, x_offset))
+	if (faster_home_adopt(draw, x_offset)) {
 		emm.filter_alpha = .9 * emm.filter_alpha;
-	if (stabler_home_adopt(draw, x_offset))
+		s.filter_alpha = emm.filter_alpha;
+		request_settings_store = true;
+	}
+	if (stabler_home_adopt(draw, x_offset)) {
 		emm.filter_alpha = 1. - .9 * (1. - emm.filter_alpha);
+		s.filter_alpha = emm.filter_alpha;
+		request_settings_store = true;
+	}
 
 	draw.set_pen(0);
 	draw.text("Kontrolle An:", {10 + x_offset, 74}, 150l, 1);
+	set_checkbox(enable_control, emm.enable_control);
 	if (enable_control(draw, x_offset)) {
-		enable_control.style = enable_control.style == ButtonStyle::DEFAULT ? ButtonStyle::BORDER: ButtonStyle::DEFAULT;
-		enable_control.text = enable_control.style == ButtonStyle::DEFAULT ? "" : "X";
-		emm.enable_control = enable_control.style == ButtonStyle::BORDER;
+		emm.enable_control = !emm.enable_control;
+		s.enable_emm = emm.enable_control;
+		request_settings_store = true;
 	}
 	draw.set_pen(0);
-	std::string_view power = static_format<64>("Verbrauch geglättet: {:.1f}W", emm.home_power);
-	draw.text(power, {10 + x_offset, 90}, 180, 1);
-	int y = 110;
+	draw.text("WR Leistung bias:", {10 + x_offset, 90}, 150l, 1);
+	std::string_view power = static_format<64>("{}", s.power_offset);
+	draw.text(power, {150 + x_offset, 90}, 100, 1);
+	if (bias_dec10(draw, x_offset)) {
+		s.power_offset -= 10;
+		request_settings_store = true;
+	}
+	if (bias_dec(draw, x_offset)) {
+		s.power_offset -= 1;
+		request_settings_store = true;
+	}
+	if (bias_inc(draw, x_offset)) {
+		s.power_offset += 1;
+		request_settings_store = true;
+	}
+	if (bias_inc10(draw, x_offset)) {
+		s.power_offset += 10;
+		request_settings_store = true;
+	}
+	draw.set_pen(0);
+	power = static_format<64>("Verbrauch geglättet: {:.1f}W", emm.home_power);
+	draw.text(power, {10 + x_offset, 105}, 180, 1);
+	int y = 120;
 	for (int i: range(requested_powers.size())) {
 		power = static_format<64>("Geforderte Leistung {}: {:.1f}W", i, requested_powers[i].requested_power);
 		draw.text(power, {10 + x_offset, y}, 180, 1);
-		y += 15;
+		y += 10;
 	}
 	for (int i: range(1, 10)) {
 		draw.text(log_storage::Default().logs[-i].message.sv(), {10 + x_offset, y}, 240, 1);
-		y += 11;
+		y += 9;
 	}
 }
 bool EmmPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
@@ -790,6 +825,14 @@ bool EmmPage::handle_touch_input(TouchInfo &touch_info, int x_offset) {
 	if (stabler_home_adopt.handle_touch_input(touch_info, x_offset))
 		return true;
 	if (enable_control.handle_touch_input(touch_info, x_offset))
+		return true;
+	if (bias_dec10.handle_touch_input(touch_info, x_offset))
+		return true;
+	if (bias_dec.handle_touch_input(touch_info, x_offset))
+		return true;
+	if (bias_inc.handle_touch_input(touch_info, x_offset))
+		return true;
+	if (bias_inc10.handle_touch_input(touch_info, x_offset))
 		return true;
 	return false;
 }
@@ -807,12 +850,19 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 		return;
 
 	// local utility functions
-	const auto remove_addr = [&request_settings_store](ModbusTcpAddr a, settings &s, runtime_state &r) {
+	const auto remove_addr = [](ModbusTcpAddr a, settings &s, runtime_state &r) {
 		ModbusTcpAddr *s_addr = s.configured_inverters | find{a};
 		if (!s_addr)
 			return;
 		request_settings_store = true;
+		// remove by swapping with the last element, the battery priorities have to be moved the same way
+		int idx = s_addr - s.configured_inverters.begin();
+		if (idx < s.inverter_bat_prio.size()) {
+			s.inverter_bat_prio[idx] = s.inverter_bat_prio[-1];
+			s.inverter_bat_prio.pop();
+		}
 		*s_addr = *s.configured_inverters.pop();
+		s.sanitize();
 		AddrName *r_ip = r.found_ips | find{[&a](AddrName ipn){return a == ipn.addr;}};
 		if (!r_ip)
 			return;
@@ -906,8 +956,10 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 			a.port = to_int(port.button.text).value_or(0);
 			a.modbus_id = std::clamp(to_int(addr.button.text).value_or(0), 0, 255);
 			bool ip_exists = s.configured_inverters | find{a};
-			if (!ip_exists && s.configured_inverters.push(a))
+			if (!ip_exists && s.configured_inverters.push(a)) {
+				s.sanitize(); // adds the default battery priority for the new inverter
 				request_settings_store = true;
+			}
 			else if (ip_exists)
 				LogWarning("Addr {}.{}.{}.{}:{}|{} already exists", ip1.button.text, ip2.button.text, ip3.button.text, ip4.button.text, port.button.text, addr.button.text);
 			else
@@ -919,7 +971,8 @@ void SettingsPage::draw(Draw &draw, TimeInfo time_info, float x_off, settings &s
 			a.ip |= std::clamp(to_int(ip4_m.button.text).value_or(0), 0, 255);
 			a.port = to_int(port_m.button.text).value_or(0);
 			a.modbus_id = std::clamp(to_int(addr_m.button.text).value_or(0), 0, 255);
-			request_settings_store = a != s.configured_meter;
+			if (a != s.configured_meter) // do not reset a store request that is still pending
+				request_settings_store = true;
 			s.configured_meter = a;
 		}
 	}

@@ -92,14 +92,14 @@ static Touchscreen& touchscreen() {
 
 static std::atomic<float> page_offset;
 
-static PowerInfo home_power {.device_id = HOME_ID, .imp_w = 2700, .exp_w = 0};
-void update_home_power() {
+// computes the home power from the inverter outputs and the grid power (returned instead of stored globally
+// as it is used by the display and the modbus task concurrently)
+PowerInfo calc_home_power() {
 	float int_power{};
 	for (const InverterGroup &pi: g::inverters().read_power)
 		int_power += pi.inverter.exp_w - pi.inverter.imp_w;
 	int_power += -g::meter().power_info.exp_w + g::meter().power_info.imp_w;
-	home_power.imp_w = std::max(int_power, 0.f);
-	home_power.exp_w = -std::min(int_power, 0.f);
+	return PowerInfo{.device_id = HOME_ID, .imp_w = std::max(int_power, 0.f), .exp_w = -std::min(int_power, 0.f)};
 }
 
 std::array<std::string_view, 4> texts{"Hello darkness", "my old friend,", "shall peace and glory", "thy remove"};
@@ -131,6 +131,7 @@ void display_task(void *) {
 			request_settings_load = false;
 			persistent_storage_t::Default().read(&persistent_storage_layout::persistent_settings, settings::Default());
 			settings::Default().sanitize();
+			emm().apply_settings(settings::Default());
 		}
 		if (request_store_wifi) {
 			request_store_wifi = false;
@@ -158,7 +159,7 @@ void display_task(void *) {
 		draw_ctx().draw.text(fps_string, {210, 1}, 40, 1);
 		fps_string = static_format<64>("{0:%d}.{0:%m}.{0:%y}\n{0:%R}", epoch_t);
 		draw_ctx().draw.text(fps_string, {5, 1}, 80, 1);
-		update_home_power();
+		PowerInfo home_power = calc_home_power();
 		overview_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, g::inverters().read_power.to_span(), home_power, g::meter().power_info);
 		history_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset);
 		emm_page().draw(draw_ctx().draw, {ms, delta_ms}, cur_page_offset, emm(), g::inverters().control_infos.to_span());
@@ -228,8 +229,7 @@ void modbus_task(void *) {
 		}
 		uint32_t start_ms = time_ms();
 		time_t epoch_s = ntp_client::Default().synched() ? ntp_client::Default().get_time_since_epoch(): 0;
-		if (settings::Default().configured_meter != ModbusTcpAddr{})
-			g::meter().initiate_discover(settings::Default().configured_meter);
+		g::meter().initiate_discover(settings::Default().configured_meter); // an empty address disconnects the meter
 		g::inverters().initiate_discover_inverters(&settings::Default().configured_inverters);
 
 		g::meter().initiate_retrieve_infos();
@@ -240,8 +240,17 @@ void modbus_task(void *) {
 		g::inverters().wait_all(remaining_time);
 
 		// update requested power
-		update_home_power();
+		// the lwip lock keeps the tcp callbacks from changing the read values during the calculation
+		cyw43_arch_lwip_begin();
+		PowerInfo home_power = calc_home_power();
+		{
+			const auto &prios = settings::Default().inverter_bat_prio;
+			auto &control_infos = g::inverters().control_infos;
+			for (int i: range(control_infos.size()))
+				control_infos[i].bat_priority = i < prios.size() ? std::max(prios[i], 1): 1;
+		}
 		emm().update_power(home_power.imp_w - home_power.exp_w, g::inverters().read_power, g::inverters().control_infos, settings::Default());
+		cyw43_arch_lwip_end();
 		// when the control gets disabled the limits are removed so the inverters run their own control again
 		// (repeated a few cycles as a busy inverter skips a request, the revert timeout is the last fallback)
 		static bool control_was_enabled{};
@@ -370,6 +379,7 @@ void startup_task(void *) {
 	cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);
 	persistent_storage_t::Default().read(&persistent_storage_layout::persistent_settings, settings::Default());
 	settings::Default().sanitize();
+	emm().apply_settings(settings::Default());
 	wifi_storage::Default().update_hostname();
 	Webserver().start();
 	g::meter();

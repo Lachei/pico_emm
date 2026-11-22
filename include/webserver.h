@@ -32,12 +32,19 @@ tcp_server_typed& Webserver() {
 		res.res_add_header("Content-Length", "0");
 		res.res_write_body();
 	};
-	const auto post_login = [&fill_unauthorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+	// returns false and fills an unauthorized response if the request does not carry valid credentials.
+	// The lambdas are stored in the static webserver, so captures have to be by value
+	const auto authorized = [fill_unauthorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
 		std::string_view auth_header = req.headers_view.get_header("Authorization");
 		if (auth_header.empty() || crypto_storage::Default().check_authorization(req.method, auth_header).empty()) {
 			fill_unauthorized(req, res);
-			return;
+			return false;
 		}
+		return true;
+	};
+	const auto post_login = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
+			return;
 		res.res_set_status_line(HTTP_VERSION, STATUS_OK);
 		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");
 		res.res_add_header("Content-Length", "0");
@@ -70,7 +77,9 @@ tcp_server_typed& Webserver() {
 		if (0 == format_to_sv(length_hdr, "{}", size))
 			LogError("Failed to write header length");
 	};
-	const auto set_time = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+	const auto set_time = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
+			return;
 		ntp_client::Default().set_time_since_epoch(strtoul(req.body.data(), nullptr, 10));
 		res.res_set_status_line(HTTP_VERSION, STATUS_OK);
 		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");
@@ -87,7 +96,9 @@ tcp_server_typed& Webserver() {
 		if (0 == format_to_sv(length_hdr, "{}", body_size))
 			LogError("Failed to write header length");
 	};
-	const auto set_log_level = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+	const auto set_log_level = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
+			return;
 		static constexpr std::string_view json_success{R"({"status":"success"})"};
 		static constexpr std::string_view json_fail{R"({"status":"error"})"};
 		LogInfo("Change log level to {}", req.body);
@@ -133,7 +144,9 @@ tcp_server_typed& Webserver() {
 		res.res_add_header("Content-Length", static_format<8>("{}", wifi_storage::Default().hostname.size()));
 		res.res_write_body(wifi_storage::Default().hostname.sv());
 	};
-	const auto set_hostname = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+	const auto set_hostname = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
+			return;
 		res.res_set_status_line(HTTP_VERSION, STATUS_OK);
 		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");
 		res.res_add_header("Content-Length", "0");
@@ -152,7 +165,9 @@ tcp_server_typed& Webserver() {
 		res.res_add_header("Content-Length", static_format<8>("{}", response.size()));
 		res.res_write_body(response);
 	};
-	const auto set_ap_active = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+	const auto set_ap_active = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
+			return;
 		res.res_set_status_line(HTTP_VERSION, STATUS_OK);
 		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");
 		res.res_add_header("Content-Length", "0");
@@ -162,7 +177,9 @@ tcp_server_typed& Webserver() {
 		else
 			access_point::Default().deinit();
 	};
-	const auto connect_to_wifi = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+	const auto connect_to_wifi = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
+			return;
 		res.res_set_status_line(HTTP_VERSION, STATUS_OK);
 		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");;
 		res.res_add_header("Content-Length", "0");
@@ -187,12 +204,9 @@ tcp_server_typed& Webserver() {
 		if (PICO_OK != persistent_storage_t::Default().write(wifi.pwd_wifi, &persistent_storage_layout::pwd_wifi))
 			LogError("Failed to store pwd_wifi");
 	};
-	const auto set_password = [&fill_unauthorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
-		std::string_view auth_header = req.headers_view.get_header("Authorization");
-		if (auth_header.empty() || crypto_storage::Default().check_authorization(req.method, auth_header).empty()) {
-			fill_unauthorized(req, res);
+	const auto set_password = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
 			return;
-		}
 		crypto_storage::Default().set_password(req.body);
 		res.res_set_status_line(HTTP_VERSION, STATUS_OK);
 		res.res_add_header("Server", "LacheiEmbed(josefstumpfegger@outlook.de)");
@@ -207,7 +221,9 @@ tcp_server_typed& Webserver() {
 		res.res_add_header("Content-Length", static_format<8>("{}", response.size()));
 		res.res_write_body(response);
 	};
-	const auto set_max_export = [] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+	const auto set_max_export = [authorized] (const tcp_server_typed::message_buffer &req, tcp_server_typed::message_buffer &res) {
+		if (!authorized(req, res))
+			return;
 		// body is the maximum grid export in W, the request buffer is 0 terminated
 		char *end{};
 		float max_export = strtof(req.body.data(), &end);

@@ -141,6 +141,10 @@ struct EmmPage {
 	Button faster_home_adopt{{100, 50, 13, 13}, "<"};
 	Button stabler_home_adopt{{200, 50, 13, 13}, ">"};
 	Button enable_control{{100, 70, 13, 13}, ""};
+	Button bias_dec10{{100, 89, 23, 13}, "-10"};
+	Button bias_dec{{125, 89, 13, 13}, "-"};
+	Button bias_inc{{190, 89, 13, 13}, "+"};
+	Button bias_inc10{{205, 89, 23, 13}, "+10"};
 
 	void draw(Draw &display, TimeInfo time_info, float x_offset, EMM &emm, std::span<ControlPowerInfo> requested_powers);
 	bool handle_touch_input(TouchInfo &touch_info, int x_offset);

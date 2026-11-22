@@ -3,6 +3,7 @@
 #include "log_storage.h"
 #include "ranges_util.h"
 #include "inverter_sunspec.h"
+#include "settings.h"
 
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
@@ -16,7 +17,7 @@
 #include <bitset>
 
 #define CHECK_INVERTER_CONFIGURED if (!configured_inverters) {LogError("Configured Inverters not set"); return;} parent_task = xTaskGetCurrentTaskHandle()
-#define ASSERT_OK_RETURN(status) {std::string_view s = status; if ((s) != OK) {LogError(s); return;}}
+#define ASSERT_OK_FAIL(status) {std::string_view s = status; if ((s) != OK) {LogError(s); context.request_failed = true; return;}}
 #define ASSERT_BREAK_CONTEXT(cond, message) if (!(cond)) {LogError(message); context.state = pcb_state::IDLE; context.request_close = true; break;}
 
 using namespace libmodbus_static;
@@ -28,7 +29,7 @@ enum class pcb_state {
 	IDLE, CONNECTING, CHECK_SUNS, FIND_COMMON_HDR, GET_COMMON_INFOS, FIND_DATA_HDR, START_DATA_FETCH,
 	GET_INVERTER_INFOS, GET_NAMEPLATE_INFOS, GET_SETTINGS_INFOS, GET_STATUS_INFOS,
 	GET_CONTROLS_INFOS, GET_MPPT_INFOS, GET_STORAGE_INFOS, ENABLE_INVERTER_CONTROL, ENABLE_STORAGE_CONTROL,
-	WAIT_DATA_RESPONSE, SET_POWER_INVERTER, SET_POWER_STORAGE, SET_STORAGE_MODE};
+	WAIT_DATA_RESPONSE, SET_POWER_INVERTER, SET_POWER_STORAGE, SET_STORAGE_MODE, SET_MIN_RESERVE};
 enum class request_type {NONE, SUNS, SUNS_HEADER, IMP_POWER, EXP_POWER, SOC, P_SET};
 struct generic_halfs_registers {
 	constexpr static int OFFSET = 40000;
@@ -48,7 +49,8 @@ constexpr static int NAMEPLATE_REFETCH_S{10 * 60};
 constexpr static int SETTINGS_REFETCH_S{5 * 60};
 constexpr static int STATUS_REFETCH_S{1 * 60};
 constexpr static int STORAGE_REFETCH_S{30};
-constexpr static int MAX_MODBUS_READ_REGISTERS{125};
+// limited by the 256 byte frame buffer of modbus_register: 7 byte mbap + fc + byte count + 2 * 123 = 255
+constexpr static int MAX_MODBUS_READ_REGISTERS{123};
 // storage control (sunspec model 124 as used by fronius gen24):
 // StorCtl_Mod bit0 activates the charge limit InWRte, bit1 the discharge limit OutWRte (both in % of WChaMax).
 // A negative OutWRte forces charging, a negative InWRte forces discharging, so InWRte = c, OutWRte = -c
@@ -57,12 +59,24 @@ constexpr static uint16_t STOR_CTL_LIMIT_CHARGE{1};
 constexpr static uint16_t STOR_CTL_LIMIT_DISCHARGE{2};
 // charging from the ac side has to be allowed, else a battery can not take up the export of other inverters
 constexpr static uint16_t CHA_GRI_SET_GRID{1};
+// the minimum reserve makes the inverter charge the battery from the grid up to the reserve whenever the window of
+// InWRte/OutWRte allows charging (seen on a gen24 with MinRsvPct = 100%), the emm handles the socs itself.
+// The value is refetched with the storage model and reset to 0 with the next power write if it was changed
+constexpr static uint16_t MIN_RESERVE_PCT{0};
 // if the emm stops sending (crash, network loss) the inverters fall back to their own control after this time
 constexpr static uint16_t CONTROL_REVERT_S{60};
 // WMaxLimPct, WMaxLimPct_WinTms, WMaxLimPct_RvrtTms, WMaxLimPct_RmpTms, WMaxLim_Ena
 static const int INVERTER_LIMIT_REGISTERS{suns_offsetof(&model_controls::WMaxLim_Ena) - suns_offsetof(&model_controls::WMaxLimPct) + 1};
 // OutWRte, InWRte, InOutWRte_WinTms, InOutWRte_RvrtTms, InOutWRte_RmpTms
 static const int STORAGE_RATE_REGISTERS{suns_offsetof(&model_storage::InOutWRte_RmpTms) - suns_offsetof(&model_storage::OutWRte) + 1};
+// inverter models: 101-103 use int16 + scale factors, 111-113 use float32 (single, split, three phase)
+enum class inverter_encoding {UNKNOWN, INT_SF, FLOAT};
+constexpr static std::array<uint16_t, 3> INVERTER_INT_IDS{modbus_swap(101), modbus_swap(102), modbus_swap(103)};
+constexpr static std::array<uint16_t, 3> INVERTER_FLOAT_IDS{modbus_swap(111), modbus_swap(112), modbus_swap(113)};
+// register offsets (including the 2 header registers) of W and W_SF in the int models 101-103
+constexpr static int INVERTER_INT_W_OFFSET{14};
+constexpr static int INVERTER_INT_W_SF_OFFSET{15};
+static_assert(model_inverter::ID == modbus_swap(113));
 static int16_t from_float_i16(float val, sunssf scale) { return int16_t(std::lround(val * std::pow<float>(10, -scale))); }
 // internal tcp context
 struct context_t {
@@ -76,6 +90,8 @@ struct context_t {
 	int common_addr{-1}; // only fetched once after new discovery, for reread reboot
 	uint32_t common_fetched_s{};
 	int inverter_addr{-1}; // always fetch, needed for current power value (should be every second)
+	int inverter_length{-1}; // registers of the inverter model including the header
+	inverter_encoding inverter_enc{inverter_encoding::UNKNOWN}; // value encoding of the inverter model, set at discovery
 	int nameplate_addr{-1};
 	uint32_t nameplate_fetched_s{}; // refetched only once every 10 minutes, should never change
 	int settings_addr{-1};
@@ -88,10 +104,12 @@ struct context_t {
 	uint32_t controls_fetched_s{}; // refetched only once, afterwards is only written
 	int storage_addr{-1};
 	uint32_t storage_fetched_s{}; // refetched all 30 s for up to date 
+	bool write_min_reserve{}; // MinRsvPct is reset with the next power write
 	uint16_t tcp_frame{1};
 	modbus_register<generic_modbus_layout> modbus{.addr = 0}; // client always has addr 1
 	int last_modbus_addr{-1};
 	ModbusTcpAddr addr{}; // address the context belongs to, used to detect configuration changes
+	bool request_failed{}; // set if a request could not be sent, the state machine then goes back to idle
 };
 static static_vector<context_t, MAX_INVERTERS> contexts{};
 static TaskHandle_t parent_task{};
@@ -118,6 +136,10 @@ static void reset_inverter(int i) {
 	c.status_addr = c.mppt_addr = c.mppt_length = c.controls_addr = c.storage_addr = c.last_modbus_addr = -1;
 	c.common_fetched_s = c.nameplate_fetched_s = c.settings_fetched_s = c.status_fetched_s = 0;
 	c.controls_fetched_s = c.storage_fetched_s = 0;
+	c.write_min_reserve = false;
+	c.inverter_length = -1;
+	c.inverter_enc = inverter_encoding::UNKNOWN;
+	c.request_failed = false;
 	c.addr = {};
 	inverters().connected_names[i] = {};
 	inverters().read_power[i] = {};
@@ -205,19 +227,20 @@ void inverter_infos::initiate_send_power_requests_all(bool release) {
 		float discharge_w{bat_ref_w};// discharge limit, negative forces charging
 		uint16_t stor_ctl_mod{};
 		if (!release) {
+			float requested_power = ci.requested_power + settings::Default().power_offset;
 			float pv_w = read_power[i].pv.exp_w;
 			float cha_max = ci.power_max_cha > 0 ? ci.power_max_cha: bat_ref_w;
 			float discha_max = ci.power_max_discha > 0 ? ci.power_max_discha: bat_ref_w;
-			inv_power_r = std::clamp(ci.requested_power, .0f, ci.power_max) / ci.power_max * 100.f;
+			inv_power_r = std::clamp(requested_power, .0f, ci.power_max) / ci.power_max * 100.f;
 			stor_ctl_mod = STOR_CTL_LIMIT_CHARGE | STOR_CTL_LIMIT_DISCHARGE;
-			if (ci.requested_power < 0) {
+			if (requested_power < 0) {
 				// charge with the requested ac import plus everything pv delivers
-				float c = std::min(-ci.requested_power + pv_w, cha_max);
+				float c = std::min(-requested_power + pv_w, cha_max);
 				charge_w = c;
 				discharge_w = -c;
-			} else if (ci.requested_power > pv_w) {
+			} else if (requested_power > pv_w) {
 				// pv is not enough, the battery has to deliver the rest
-				float d = std::min(ci.requested_power - pv_w, discha_max);
+				float d = std::min(requested_power - pv_w, discha_max);
 				charge_w = -d;
 				discharge_w = d;
 			} else {
@@ -229,7 +252,7 @@ void inverter_infos::initiate_send_power_requests_all(bool release) {
 		sunssf rate_sf = modbus_swap_i16(storage->InOutWRte_SF);
 		float in_r = std::clamp(charge_w / bat_ref_w * 100.f, -100.f, 100.f);
 		float out_r = std::clamp(discharge_w / bat_ref_w * 100.f, -100.f, 100.f);
-		LogInfo("Power req {}: {}% in {}% out {}%", i, inv_power_r, in_r, out_r);
+		LogInfo("Power req {}: {:.1f}% in {:.1f}% out {.1f}%", i, inv_power_r, in_r, out_r);
 
 		control->WMaxLimPct = modbus_swap(from_float(inv_power_r, modbus_swap_i16(control->WMaxLimPct_SF)));
 		control->WMaxLimPct_WinTms = 0;
@@ -242,6 +265,12 @@ void inverter_infos::initiate_send_power_requests_all(bool release) {
 		storage->InOutWRte_RvrtTms = modbus_swap(CONTROL_REVERT_S);
 		storage->InOutWRte_RmpTms = 0;
 		storage->StorCtl_Mod = modbus_swap(stor_ctl_mod);
+		// only while in control, a release leaves the reserve to the inverter
+		contexts[i].write_min_reserve = !release && storage->MinRsvPct != modbus_swap(MIN_RESERVE_PCT);
+		if (contexts[i].write_min_reserve) {
+			LogInfo("Resetting minimum reserve of {} from {}", connected_names[i].sv(), modbus_swap(storage->MinRsvPct));
+			storage->MinRsvPct = modbus_swap(MIN_RESERVE_PCT);
+		}
 
 		contexts[i].wait_receive = true;
 		contexts[i].state = pcb_state::SET_POWER_INVERTER;
@@ -373,8 +402,12 @@ static void advance_context_state(context_t &context, bool received) {
 				break;
 			}
 			LogInfo("Got header data for id: {}", modbus_swap(hdr->id));
+			if (std::ranges::contains(INVERTER_FLOAT_IDS, hdr->id) || std::ranges::contains(INVERTER_INT_IDS, hdr->id)) {
+				context.inverter_addr = context.last_modbus_addr;
+				context.inverter_length = std::min(SUNSPEC_HDR_SIZE + hdr->length(), MAX_MODBUS_READ_REGISTERS);
+				context.inverter_enc = std::ranges::contains(INVERTER_FLOAT_IDS, hdr->id) ? inverter_encoding::FLOAT: inverter_encoding::INT_SF;
+			}
 			switch (hdr->id) {
-				case model_inverter::ID: 	context.inverter_addr = context.last_modbus_addr; break;
 				case model_nameplate::ID:	context.nameplate_addr = context.last_modbus_addr; break;
 				case model_settings::ID:	context.settings_addr = context.last_modbus_addr; break;
 				case model_status::ID:		context.status_addr = context.last_modbus_addr; break;
@@ -402,6 +435,11 @@ static void advance_context_state(context_t &context, bool received) {
 			// allow charging from the ac side (eg. with the export of another inverter). The limits themselves are only
 			// activated with the first power request, until then the inverter keeps running its own control
 			model_storage *storage = context.modbus.storage.get_addr_as<model_storage>(context.storage_addr);
+			if (!storage) {
+				LogError("Storage model does not fit into the register buffer, removing inverter");
+				context.request_close = true;
+				break;
+			}
 			storage->ChaGriSet = modbus_swap(CHA_GRI_SET_GRID);
 			context.state = pcb_state::ENABLE_INVERTER_CONTROL;
 			request_modbus_registers_write(context, context.storage_addr + suns_offsetof(&model_storage::ChaGriSet), suns_sizeof<decltype(model_storage::ChaGriSet)>());
@@ -425,7 +463,7 @@ static void advance_context_state(context_t &context, bool received) {
 			[[fallthrough]]; // directly execute get common
 		case pcb_state::GET_INVERTER_INFOS:
 			ASSERT_BREAK_CONTEXT(context.inverter_addr != -1, "Inverter address unknown");
-			request_modbus_registers(context, context.inverter_addr, suns_sizeof(model_inverter{}));
+			request_modbus_registers(context, context.inverter_addr, context.inverter_length);
 			context.state = pcb_state::GET_NAMEPLATE_INFOS;
 			break;
 			// inverter infos have to be read always, so no fallthrough possible
@@ -473,7 +511,6 @@ static void advance_context_state(context_t &context, bool received) {
 			parse_modbus_frame(context, received);
 			ASSERT_BREAK_CONTEXT(context.mppt_addr != -1, "Mppt address unknown");
 			// always fetch mptt infos
-			context.controls_fetched_s = s;
 			request_modbus_registers(context, context.mppt_addr, std::min(SUNSPEC_HDR_SIZE + context.mppt_length, MAX_MODBUS_READ_REGISTERS));
 			context.state = pcb_state::GET_STORAGE_INFOS;
 			break;
@@ -506,8 +543,25 @@ static void advance_context_state(context_t &context, bool received) {
 		case pcb_state::SET_STORAGE_MODE:
 			parse_modbus_frame(context, received);
 			request_modbus_registers_write(context, context.storage_addr + suns_offsetof(&model_storage::StorCtl_Mod), suns_sizeof<decltype(model_storage::StorCtl_Mod)>());
+			context.state = context.write_min_reserve ? pcb_state::SET_MIN_RESERVE: pcb_state::WAIT_DATA_RESPONSE;
+			break;
+		case pcb_state::SET_MIN_RESERVE:
+			parse_modbus_frame(context, received);
+			context.write_min_reserve = false;
+			request_modbus_registers_write(context, context.storage_addr + suns_offsetof(&model_storage::MinRsvPct), suns_sizeof<decltype(model_storage::MinRsvPct)>());
 			context.state = pcb_state::WAIT_DATA_RESPONSE;
 			break;
+	}
+	if (context.request_failed) {
+		// no request went out, so no response will come: do not wait for it
+		context.request_failed = false;
+		bool discovery = prev_state == pcb_state::CONNECTING || prev_state == pcb_state::CHECK_SUNS ||
+			prev_state == pcb_state::FIND_COMMON_HDR || prev_state == pcb_state::GET_COMMON_INFOS ||
+			prev_state == pcb_state::FIND_DATA_HDR || prev_state == pcb_state::ENABLE_STORAGE_CONTROL;
+		if (discovery) // incomplete discovery, reconnect and discover from scratch
+			context.request_close = true;
+		LogError("Request failed in state {}, back to idle", int(prev_state));
+		context.state = pcb_state::IDLE;
 	}
 	if (context.state == pcb_state::IDLE)
 		context.wait_receive = false;
@@ -519,13 +573,14 @@ static void request_modbus_registers(context_t &context, int offset, int registe
 	int i = &context - contexts.begin();
 	context.modbus.switch_to_request();
 	context.last_modbus_addr = offset;
-	ASSERT_OK_RETURN(context.modbus.start_tcp_frame(context.tcp_frame++, inverters().configured_inverters[0][i].modbus_id));
+	ASSERT_OK_FAIL(context.modbus.start_tcp_frame(context.tcp_frame++, inverters().configured_inverters[0][i].modbus_id));
 	auto [res, err] = context.modbus.get_frame_read(libmodbus_static::register_t::HALFS, offset, register_count);
-	ASSERT_OK_RETURN(err);
+	ASSERT_OK_FAIL(err);
 	err_t error = tcp_write(context.pcb, res.data(), res.size(), TCP_WRITE_FLAG_COPY);
 	context.modbus.switch_to_response();
 	if (error != ERR_OK) {
 		LogError("Error sending modbus read frame {}", error);
+		context.request_failed = true;
 		return;
 	}
 	error = tcp_output(context.pcb);
@@ -538,13 +593,14 @@ static void request_modbus_registers_write(context_t &context, int offset, int r
 	context.last_modbus_addr = offset;
 	uint16_t* data_start = context.modbus.storage.halfs_registers.data.data() + offset - generic_halfs_registers::OFFSET;
 	std::span<uint8_t> data{(uint8_t*)data_start, (uint8_t*)(data_start + register_count)};
-	ASSERT_OK_RETURN(context.modbus.start_tcp_frame(context.tcp_frame++, inverters().configured_inverters[0][i].modbus_id));
+	ASSERT_OK_FAIL(context.modbus.start_tcp_frame(context.tcp_frame++, inverters().configured_inverters[0][i].modbus_id));
 	auto [res, err] = context.modbus.get_frame_write(libmodbus_static::register_t::HALFS_WRITE, offset, data);
-	ASSERT_OK_RETURN(err);
+	ASSERT_OK_FAIL(err);
 	err_t error = tcp_write(context.pcb, res.data(), res.size(), TCP_WRITE_FLAG_COPY);
 	context.modbus.switch_to_response();
 	if (error != ERR_OK) {
 		LogError("Error sending modbus write frame {}", error);
+		context.request_failed = true;
 		return;
 	}
 	error = tcp_output(context.pcb);
@@ -571,10 +627,32 @@ static void parse_modbus_frame(context_t &context, bool &received) {
 	received = false;
 	// updating the inverter informations
 	int i = &context - contexts.begin();
-	inverters().control_infos[i].last_connection_s = time_s();
+	inverters().control_infos[i].last_connection_s = std::max(time_s(), uint32_t(1)); // 0 means never connected
 	if (context.last_modbus_addr == context.inverter_addr) {
-		const model_inverter *inverter = context.modbus.storage.get_addr_as<model_inverter>(context.inverter_addr);
-		float w = modbus_swap_f(inverter->W);
+		float w{};
+		switch (context.inverter_enc) {
+			case inverter_encoding::FLOAT: {
+				const model_inverter *inverter = context.modbus.storage.get_addr_as<model_inverter>(context.inverter_addr);
+				if (!inverter) {
+					LogError("Inverter model does not fit into the register buffer");
+					return;
+				}
+				w = modbus_swap_f(inverter->W);
+				break;
+			}
+			case inverter_encoding::INT_SF: {
+				const auto *regs = context.modbus.storage.get_addr_as<std::array<uint16_t, INVERTER_INT_W_SF_OFFSET + 1>>(context.inverter_addr);
+				if (!regs) {
+					LogError("Inverter model does not fit into the register buffer");
+					return;
+				}
+				w = to_float(modbus_swap_i16((*regs)[INVERTER_INT_W_OFFSET]), modbus_swap_i16((*regs)[INVERTER_INT_W_SF_OFFSET]));
+				break;
+			}
+			case inverter_encoding::UNKNOWN:
+				LogError("Inverter model encoding unknown");
+				return;
+		}
 		inverters().read_power[i].inverter.imp_w = inverters().read_power[i].inverter.exp_w = 0;
 		if (w < 0)
 			inverters().read_power[i].inverter.imp_w = -w;
@@ -582,6 +660,10 @@ static void parse_modbus_frame(context_t &context, bool &received) {
 			inverters().read_power[i].inverter.exp_w = w;
 	} else if (context.last_modbus_addr == context.nameplate_addr) {
 		const model_nameplate *nameplate = context.modbus.storage.get_addr_as<model_nameplate>(context.nameplate_addr);
+		if (!nameplate) {
+			LogError("Model does not fit into the register buffer");
+			return;
+		}
 		float max_pow = to_float(modbus_swap(nameplate->WRtg), modbus_swap_i16(nameplate->WRtg_SF));
 		float max_pow_bat_cha = to_float(modbus_swap(nameplate->MaxChaRte), modbus_swap_i16(nameplate->MaxChaRte_SF));
 		float max_pow_bat_discha = to_float(modbus_swap(nameplate->MaxDisChaRte), modbus_swap_i16(nameplate->MaxDisChaRte_SF));
@@ -595,10 +677,19 @@ static void parse_modbus_frame(context_t &context, bool &received) {
 			pi.power_max_discha = max_pow_bat_discha;
 	} else if (context.last_modbus_addr == context.settings_addr) {
 		const model_settings *settings = context.modbus.storage.get_addr_as<model_settings>(context.settings_addr);
+		if (!settings) {
+			LogError("Model does not fit into the register buffer");
+			return;
+		}
 		float max_w = to_float(modbus_swap(settings->WMax), modbus_swap_i16(settings->WMax_SF));
-		inverters().control_infos[i].power_max = max_w;
+		if (max_w > 0) // 0 means not supported, keep the nameplate value then
+			inverters().control_infos[i].power_max = max_w;
 	} else if (context.last_modbus_addr == context.status_addr) {
 		const model_status *status = context.modbus.storage.get_addr_as<model_status>(context.status_addr);
+		if (!status) {
+			LogError("Model does not fit into the register buffer");
+			return;
+		}
 		bitfield16 pv_status = modbus_swap(status->PVConn);
 		bitfield16 bat_status = modbus_swap(status->StorConn);
 		if (pv_status > 0 && inverters().read_power[i].pv.device_id == 0)
@@ -613,6 +704,10 @@ static void parse_modbus_frame(context_t &context, bool &received) {
 		constexpr uint16_t mppt_hdr_size = suns_sizeof(model_mppt{}) - 4 * suns_sizeof(mppt_infos{});
 		static_assert(mppt_hdr_size == 10);
 		const model_mppt *mppt = context.modbus.storage.get_addr_as<model_mppt>(context.mppt_addr);
+		if (!mppt) {
+			LogError("Model does not fit into the register buffer");
+			return;
+		}
 		// the model length limits the amount of modules that were actually read
 		int read_registers = std::min(SUNSPEC_HDR_SIZE + context.mppt_length, MAX_MODBUS_READ_REGISTERS);
 		int max_mppt_count = std::max(read_registers - mppt_hdr_size, 0) / suns_sizeof(mppt_infos{});
@@ -633,6 +728,10 @@ static void parse_modbus_frame(context_t &context, bool &received) {
 		}
 	} else if (context.last_modbus_addr == context.storage_addr) {
 		const model_storage *storage = context.modbus.storage.get_addr_as<model_storage>(context.storage_addr);
+		if (!storage) {
+			LogError("Model does not fit into the register buffer");
+			return;
+		}
 		inverters().read_power[i].bat_soc = to_float(modbus_swap(storage->ChaState), modbus_swap_i16(storage->ChaState_SF));
 		ControlPowerInfo &pi = inverters().control_infos[i];
 		float w_cha_max = to_float(modbus_swap(storage->WChaMax), modbus_swap_i16(storage->WChaMax_SF));

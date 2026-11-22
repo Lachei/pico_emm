@@ -17,7 +17,11 @@ void print_ip(static_string<N>& s, uint32_t ip, uint16_t port, uint8_t m_id) {
 inline bool request_settings_store{};
 inline bool request_settings_load{};
 struct settings {
-	bool enable_emm{};
+	int power_offset{}; // default power added to the requested power befor sending (ignores all emm logik)
+	uint32_t version{0x454d4d02}; // on change resetes config on start
+	bool enable_emm{}; // power control of the inverters active
+	bool invert_home{}; // invert the sign of the measured home power
+	float filter_alpha{.1f}; // smoothing of the home power, see EMM::filter_alpha
 	float max_export{}; // can be used to set maximum export limit of plant
 	static_vector<int, MAX_INVERTERS> inverter_bat_prio{}; // high prio means that the battery should be kept full
 	ModbusTcpAddr configured_meter{};
@@ -43,14 +47,23 @@ struct settings {
 	}
 
 	constexpr void sanitize() { 
+		if (version != settings{}.version) {
+			*this = settings{};
+			return;
+		}
 		if (!(max_export >= 0) || std::isinf(max_export)) // also catches nan from uninitialized flash
 			max_export = 0;
+		if (!(filter_alpha >= 0 && filter_alpha < 1))
+			filter_alpha = .1f;
 		configured_inverters.sanitize(); 
 		inverter_bat_prio.sanitize();
 		if (inverter_bat_prio.size() < configured_inverters.size())
 			for (int i: range(inverter_bat_prio.size(), configured_inverters.size()))
 				inverter_bat_prio[i] = 1;
 		inverter_bat_prio.resize(configured_inverters.size());
+		for (int &p: inverter_bat_prio)
+			p = std::clamp(p, 1, 1000);
+		power_offset = std::clamp(power_offset, -1000, 1000);
 	}
 };
 
@@ -63,10 +76,13 @@ inline std::ostream& operator<<(std::ostream &os, const settings &s) {
 	for (int i: range(s.configured_inverters.size())) {
 		os << "  ";
 		ip_to_stream(os, s.configured_inverters[i]);
-		os << '\n';
+		os << " battery priority " << (i < s.inverter_bat_prio.size() ? s.inverter_bat_prio[i]: 1) << '\n';
 	}
 	os << "configured_meter: ";
 	ip_to_stream(os, s.configured_meter);
+	os << "\npower_offset: " << s.power_offset;
+	os << ", emm control enabled: " << (s.enable_emm ? "true": "false") << ", invert home: " << (s.invert_home ? "true": "false");
+	os << ", filter alpha: " << s.filter_alpha << ", max export: " << s.max_export << "W";
 	return os << '\n';
 }
 
@@ -96,6 +112,19 @@ inline std::istream& operator>>(std::istream &is, settings &s) {
 		is >> ip;
 		parse_ip(ip, s.configured_meter);
 
+	} else if (key == "inverter_prio") {
+		// expected format: inverter_index priority (index as listed by status, priority >= 1)
+		int idx{-1}, prio{};
+		is >> idx >> prio;
+		if (!is || idx < 0 || idx >= s.configured_inverters.size() || prio < 1) {
+			is.setstate(std::ios_base::failbit);
+		} else {
+			s.sanitize(); // makes sure the priorities have the same size as the inverters
+			s.inverter_bat_prio[idx] = prio;
+		}
+	} else if (key == "power_offset") {
+		is >> s.power_offset;
+		s.sanitize();
 	} else
 		is.setstate(std::ios_base::failbit);
 	return is;

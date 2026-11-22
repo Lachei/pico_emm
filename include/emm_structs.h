@@ -28,9 +28,9 @@ struct ControlPowerInfo {
 	float power_max_cha;	// maximum battery charge
 	float power_max_discha;	// maximum battery discharge
 	float requested_power;	// requested power by the emm
-	int bat_priority;	// the higher the more urgent it is to fill the battery of this inverter
-	uint32_t last_connection_s;
-	bool is_active() const { return (time_us_64() / 1000000) - last_connection_s < 10; }
+	int bat_priority;	// >= 1, the higher the fuller the battery is kept compared to the others (on top of the soc balancing)
+	uint32_t last_connection_s; // 0 means never connected
+	bool is_active() const { return last_connection_s != 0 && int64_t(time_us_64() / 1000000) - int64_t(last_connection_s) < 10; }
 };
 
 constexpr inline float max_exp_pow_avail(const InverterGroup &ig, const ControlPowerInfo &pi) {
